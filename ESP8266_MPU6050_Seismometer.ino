@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  ESP8266 MPU6050 Seismometer
+//  ESP8266 MPU6050 Seismometer — Software-Calibrated, Wi-Fi Watchdog
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include <ESP8266WiFi.h>
@@ -7,7 +7,7 @@
 #include <Wire.h>
 #include "I2Cdev.h"
 #include "MPU6050.h"
-#include "arduino_secrets.h"     // SECRET_SSID, SECRET_PASS, URL
+#include "arduino_secrets.h"     // must define SECRET_SSID, SECRET_PASS, URL
 
 // I2C pins on NodeMCU
 #define SDA_PIN D2  // GPIO4
@@ -18,29 +18,35 @@ const float T_MINOR    = 0.035;
 const float T_MODERATE = 0.10;
 const float T_SEVERE   = 0.50;
 
+// How many samples to “sit still” for software calibration
+const int   CALIB_SAMPLES = 2000;
+const float SCALE = 16384.0;  // LSB per g at ±2g range
+
 MPU6050 mpu;
+
+// These hold the raw-LSB bias we measured at rest
+float meanX, meanY, meanZ;
 
 void setup() {
   Serial.begin(115200);
   while (!Serial) { }
 
-  // ─── Connect to Wi-Fi ────────────────────────────────────────────────
+  // ─── Connect to Wi-Fi ──────────────────────────────────────────
   Serial.print("Connecting to Wi-Fi");
   WiFi.begin(SECRET_SSID, SECRET_PASS);
-  int wifi_tries = 0;
+  int tries = 0;
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print('.');
     delay(300);
-    if (++wifi_tries > 100) {
-      Serial.println("\nWi-Fi failed, restarting...");
+    if (++tries > 100) {
+      Serial.println("\nWi-Fi failed, rebooting…");
       ESP.restart();
     }
   }
   Serial.println();
-  Serial.print("Wi-Fi connected, IP=");
-  Serial.println(WiFi.localIP());
+  Serial.printf("Wi-Fi connected, IP=%s\n", WiFi.localIP().toString().c_str());
 
-  // ─── Initialize MPU6050 ─────────────────────────────────────────────
+  // ─── Setup MPU6050 ─────────────────────────────────────────────
   Wire.begin(SDA_PIN, SCL_PIN);
   mpu.initialize();
   mpu.setClockSource(MPU6050_CLOCK_PLL_XGYRO);
@@ -52,36 +58,54 @@ void setup() {
     while (1) delay(500);
   }
   Serial.println("✅ MPU6050 initialized.");
+
+  // ─── Software-Calibrate Bias ──────────────────────────────────
+  // Measure raw X, Y, Z for a long time while perfectly still.
+  // Compute the mean bias and store it in meanX/Y/Z.
+  Serial.println("Keep sensor perfectly still — calibrating...");
+  double sumX=0, sumY=0, sumZ=0;
+  for (int i = 0; i < CALIB_SAMPLES; i++) {
+    int16_t rx, ry, rz;
+    mpu.getAcceleration(&rx, &ry, &rz);
+    sumX += rx;
+    sumY += ry;
+    sumZ += rz;
+    delay(2);
+  }
+  meanX = sumX / CALIB_SAMPLES;
+  meanY = sumY / CALIB_SAMPLES;
+  meanZ = sumZ / CALIB_SAMPLES;
+  Serial.printf("Calibration complete: mean raw = (%.1f, %.1f, %.1f)\n",
+                meanX, meanY, meanZ);
+  delay(500);
 }
 
 void loop() {
-  // ─── Watchdog: reboot if Wi-Fi drops ────────────────────────────────
+  // ─── Wi-Fi watchdog ────────────────────────────────────────────
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Wi-Fi lost—rebooting...");
+    Serial.println("Wi-Fi lost — rebooting…");
     ESP.restart();
   }
 
-  // ─── Read raw accel ────────────────────────────────────────────────
+  // ─── Read & de-bias raw accel ─────────────────────────────────
   int16_t rawX, rawY, rawZ;
   mpu.getAcceleration(&rawX, &rawY, &rawZ);
+  float dx = rawX - meanX;
+  float dy = rawY - meanY;
+  float dz = rawZ - meanZ;
 
-  // ─── Convert to g ────────────────────────────────────────────────
-  float ax = rawX / 16384.0;
-  float ay = rawY / 16384.0;
-  float az = rawZ / 16384.0;
+  // ─── Convert to g ─────────────────────────────────────────────
+  float ax = dx / SCALE;
+  float ay = dy / SCALE;
+  float az = dz / SCALE;
 
-  // ─── Serial Plotter format (Y,Z) ─────────────────────────────────
+  // ─── Plotter output: Y,Z (zero-centered at rest) ─────────────
   Serial.print(ay, 3);
   Serial.print(',');
   Serial.println(az, 3);
 
-  // ─── Compute Δg from rest (0,0,1) ─────────────────────────────────
-  float dX = fabs(ax);
-  float dY = fabs(ay);
-  float dZ = fabs(az - 1.0);
-  float dev = max(dX, max(dY, dZ));
-
-  // ─── Trigger alarms & report ──────────────────────────────────────
+  // ─── Compute Δg and trigger ──────────────────────────────────
+  float dev = max(fabs(ax), max(fabs(ay), fabs(az)));
   if (dev >= T_SEVERE) {
     Serial.printf("SEVERE quake! Δg=%.3f\n", dev);
     reportEvent("severe", dev);
@@ -99,22 +123,31 @@ void loop() {
 }
 
 void reportEvent(const char* level, float dev) {
-  if (WiFi.status() != WL_CONNECTED) return;
+  // guard again in case Wi-Fi disappeared mid-loop
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Wi-Fi lost during POST — rebooting…");
+    ESP.restart();
+  }
 
   WiFiClient client;
   HTTPClient http;
-  http.begin(client, URL);              // URL from arduino_secrets.h
+  http.begin(client, URL);
   http.addHeader("Content-Type", "application/json");
-
-  String body = String("{\"level\":\"") + level +
-                String("\",\"deltaG\":") + String(dev, 3) +
-                String("}");
+  String body = String("{\"level\":\"") + level
+              + String("\",\"deltaG\":") + String(dev, 3)
+              + String("}");
 
   int code = http.POST(body);
-  if (code == 201) {
-    Serial.println("→ Event sent");
-  } else {
-    Serial.printf("! POST failed, code=%d\n", code);
-  }
   http.end();
+
+  if (code < 0) {
+    Serial.printf("! POST error (%d) — rebooting…\n", code);
+    ESP.restart();
+  }
+  else if (code != 201) {
+    Serial.printf("! POST returned %d\n", code);
+  }
+  else {
+    Serial.println("→ Event sent");
+  }
 }
