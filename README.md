@@ -96,7 +96,3 @@ Client → `POST /api/seismic` with JSON:
 The server timestamps each entry in `seismic.log`.
 
 ---
-
-## 📄 License
-
-This project is MIT-licensed; see [LICENSE](./LICENSE) for details.
