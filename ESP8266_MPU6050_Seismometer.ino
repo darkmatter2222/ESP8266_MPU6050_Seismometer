@@ -1,7 +1,3 @@
-// ─────────────────────────────────────────────────────────────────────────────
-//  ESP8266 MPU6050 Seismometer — Software-Calibrated, Wi-Fi Watchdog
-// ─────────────────────────────────────────────────────────────────────────────
-
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <Wire.h>
@@ -27,6 +23,9 @@ MPU6050 mpu;
 // These hold the raw-LSB bias we measured at rest
 float meanX, meanY, meanZ;
 
+// Store the MAC address once we’ve connected
+String deviceId;
+
 void setup() {
   Serial.begin(115200);
   while (!Serial) { }
@@ -46,6 +45,10 @@ void setup() {
   Serial.println();
   Serial.printf("Wi-Fi connected, IP=%s\n", WiFi.localIP().toString().c_str());
 
+  // ─── Grab and log our MAC for use as “self-ID” ───────────────────
+  deviceId = WiFi.macAddress();  
+  Serial.printf("Device MAC (self-ID): %s\n", deviceId.c_str());
+
   // ─── Setup MPU6050 ─────────────────────────────────────────────
   Wire.begin(SDA_PIN, SCL_PIN);
   mpu.initialize();
@@ -60,16 +63,12 @@ void setup() {
   Serial.println("✅ MPU6050 initialized.");
 
   // ─── Software-Calibrate Bias ──────────────────────────────────
-  // Measure raw X, Y, Z for a long time while perfectly still.
-  // Compute the mean bias and store it in meanX/Y/Z.
   Serial.println("Keep sensor perfectly still — calibrating...");
   double sumX=0, sumY=0, sumZ=0;
   for (int i = 0; i < CALIB_SAMPLES; i++) {
     int16_t rx, ry, rz;
     mpu.getAcceleration(&rx, &ry, &rz);
-    sumX += rx;
-    sumY += ry;
-    sumZ += rz;
+    sumX += rx; sumY += ry; sumZ += rz;
     delay(2);
   }
   meanX = sumX / CALIB_SAMPLES;
@@ -90,40 +89,23 @@ void loop() {
   // ─── Read & de-bias raw accel ─────────────────────────────────
   int16_t rawX, rawY, rawZ;
   mpu.getAcceleration(&rawX, &rawY, &rawZ);
-  float dx = rawX - meanX;
-  float dy = rawY - meanY;
-  float dz = rawZ - meanZ;
-
-  // ─── Convert to g ─────────────────────────────────────────────
-  float ax = dx / SCALE;
-  float ay = dy / SCALE;
-  float az = dz / SCALE;
+  float ax = (rawX - meanX) / SCALE;
+  float ay = (rawY - meanY) / SCALE;
+  float az = (rawZ - meanZ) / SCALE;
 
   // ─── Plotter output: Y,Z (zero-centered at rest) ─────────────
-  Serial.print(ay, 3);
-  Serial.print(',');
-  Serial.println(az, 3);
+  Serial.print(ay, 3); Serial.print(','); Serial.println(az, 3);
 
   // ─── Compute Δg and trigger ──────────────────────────────────
   float dev = max(fabs(ax), max(fabs(ay), fabs(az)));
-  if (dev >= T_SEVERE) {
-    Serial.printf("SEVERE quake! Δg=%.3f\n", dev);
-    reportEvent("severe", dev);
-  }
-  else if (dev >= T_MODERATE) {
-    Serial.printf("Moderate tremor. Δg=%.3f\n", dev);
-    reportEvent("moderate", dev);
-  }
-  else if (dev >= T_MINOR) {
-    Serial.printf("Minor vibration. Δg=%.3f\n", dev);
-    reportEvent("minor", dev);
-  }
+  if      (dev >= T_SEVERE)   reportEvent("severe",   dev);
+  else if (dev >= T_MODERATE) reportEvent("moderate", dev);
+  else if (dev >= T_MINOR)    reportEvent("minor",    dev);
 
   delay(50);
 }
 
 void reportEvent(const char* level, float dev) {
-  // guard again in case Wi-Fi disappeared mid-loop
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Wi-Fi lost during POST — rebooting…");
     ESP.restart();
@@ -133,21 +115,18 @@ void reportEvent(const char* level, float dev) {
   HTTPClient http;
   http.begin(client, URL);
   http.addHeader("Content-Type", "application/json");
-  String body = String("{\"level\":\"") + level
-              + String("\",\"deltaG\":") + String(dev, 3)
-              + String("}");
+
+  // build JSON including our MAC as id
+  String body = String("{")
+                + "\"id\":\""     + deviceId       + "\","
+                + "\"level\":\""  + level          + "\","
+                + "\"deltaG\":"   + String(dev, 3) 
+                + "}";
 
   int code = http.POST(body);
   http.end();
 
-  if (code < 0) {
-    Serial.printf("! POST error (%d) — rebooting…\n", code);
-    ESP.restart();
-  }
-  else if (code != 201) {
-    Serial.printf("! POST returned %d\n", code);
-  }
-  else {
-    Serial.println("→ Event sent");
-  }
+  if      (code < 0)  { Serial.printf("! POST error (%d) — rebooting…\n", code); ESP.restart(); }
+  else if (code != 201){ Serial.printf("! POST returned %d\n", code); }
+  else               { Serial.println("→ Event sent"); }
 }

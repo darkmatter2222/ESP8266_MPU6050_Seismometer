@@ -1,3 +1,5 @@
 Flask
 pymongo
 python-dotenv
+pychromecast
+gTTS
