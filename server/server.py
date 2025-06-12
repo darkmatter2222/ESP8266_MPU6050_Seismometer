@@ -16,6 +16,7 @@ LOG_FILE = os.getenv(
 MAX_LOG_BYTES = int(os.getenv("MAX_LOG_BYTES", 20 * 1024 * 1024))  # 20 MB
 
 # Global translation dict for MAC address aliases
+# Example: translation_dict = {"48:55:19:ED:D8:9A": "Ryan Office", "48:55:19:ED:9B:A9": "Bonus Room", "C8:2B:96:23:21:BC": "Kitchen"}
 translation_dict = {}
 
 # Ensure log directory and file exist
