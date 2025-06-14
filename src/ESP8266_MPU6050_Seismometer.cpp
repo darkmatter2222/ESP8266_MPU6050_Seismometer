@@ -30,6 +30,11 @@ String deviceId;
 const unsigned long CONNECTIVITY_INTERVAL = 60UL * 1000UL;  // 1 minute
 unsigned long lastConnectivityCheck = 0;
 
+// Function declarations
+void setup();
+void loop();
+void reportEvent(const char* level, float dev);
+
 void setup() {
   Serial.begin(115200);
   while (!Serial) { }
