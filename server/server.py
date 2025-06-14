@@ -41,6 +41,11 @@ open(LOG_FILE, "a", encoding="utf-8").close()
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def root():
+    """Simple health check for the root URL."""
+    return jsonify({"status": "ok", "time": datetime.utcnow().isoformat() + "Z"}), 200
+
 def on_window_end():
     """Called 2 seconds after the first event in the window."""
     global window_timer, window_devices
