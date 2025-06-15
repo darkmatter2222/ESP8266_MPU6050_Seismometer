@@ -1,5 +1,9 @@
 # ESP8266 MPU6050 Seismometer
 
+![Infographic](images/infographic.png)
+
+---
+
 A comprehensive, step-by-step guide to building, deploying, and debugging your ESP8266 + MPU6050 seismometer project entirely in Visual Studio Code.
 
 ---
