@@ -136,5 +136,28 @@ def log_seismic():
             "details": traceback.format_exc()
         }), 500
 
+@app.route("/api/init", methods=["GET"])
+def init_config():
+    """Initialization endpoint: returns heartbeat interval and sensitivity thresholds."""
+    device_id = request.args.get("id")
+    if not device_id:
+        return jsonify({"error": "Missing id parameter"}), 400
+    # ensure device known
+    translation_dict.setdefault(device_id, "")
+    # load configurable params (ms and g thresholds)
+    heartbeat_interval = int(os.getenv("HEARTBEAT_INTERVAL", 60000))
+    sens_minor = float(os.getenv("SENSITIVITY_MINOR", 0.035))
+    sens_mod = float(os.getenv("SENSITIVITY_MODERATE", 0.10))
+    sens_sev = float(os.getenv("SENSITIVITY_SEVERE", 0.50))
+    config = {
+        "heartbeat_interval": heartbeat_interval,
+        "sensitivity": {
+            "minor": sens_minor,
+            "moderate": sens_mod,
+            "severe": sens_sev
+        }
+    }
+    return jsonify(config), 200
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)

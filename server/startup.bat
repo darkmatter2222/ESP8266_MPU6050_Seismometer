@@ -7,10 +7,8 @@ REM -----------------------------------------------
 REM Change to script’s directory
 cd /d "%~dp0"
 
-REM Activate virtual environment
-call venv\Scripts\activate.bat
+REM Launch server in a new maximized console with the virtual env activated
+start "" /max cmd /k "cd /d %~dp0 && call venv\Scripts\activate.bat && python server.py & pause"
 
-REM Run the server
-python server.py
-
-pause
+REM Original window exits
+exit /b

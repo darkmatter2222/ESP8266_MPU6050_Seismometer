@@ -4,7 +4,7 @@
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "arduino_secrets.h"     // must define SECRET_SSID, SECRET_PASS, URL, ROOT_URL
-// we are using https://my.noip.com/dynamic-dns for the DNS
+#include <ArduinoJson.h>
 
 // I2C pins on NodeMCU
 #define SDA_PIN D2  // GPIO4
@@ -14,9 +14,10 @@
 #define LED_PIN LED_BUILTIN
 
 // Seismic thresholds (in g)
-const float T_MINOR    = 0.035;
-const float T_MODERATE = 0.10;
-const float T_SEVERE   = 0.50;
+unsigned long heartbeatInterval = 60000;  // ms
+float sensMinor = 0.035;
+float sensModerate = 0.10;
+float sensSevere = 0.50;
 
 // How many samples to “sit still” for software calibration
 const int   CALIB_SAMPLES = 2000;
@@ -63,6 +64,33 @@ void setup() {
   // ─── Grab and log our MAC for use as “self-ID” ─────────────────
   deviceId = WiFi.macAddress();
   Serial.printf("Device MAC (self-ID): %s\n", deviceId.c_str());
+  // ─── Initialization API call ─────────────────────────────────
+  HTTPClient initHttp;
+  WiFiClient initClient;
+  String initUrl = String(ROOT_URL) + "api/init?id=" + deviceId;
+  Serial.printf("Fetching init config from %s ... ", initUrl.c_str());
+  initHttp.begin(initClient, initUrl);
+  int initCode = initHttp.GET();
+  if (initCode != HTTP_CODE_OK) {
+    Serial.printf("Failed HTTP %d, rebooting...\n", initCode);
+    digitalWrite(LED_PIN, HIGH);
+    ESP.restart();
+  }
+  String payload = initHttp.getString();
+  initHttp.end();
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    Serial.println("JSON parse error, rebooting...");
+    ESP.restart();
+  }
+  heartbeatInterval = doc["heartbeat_interval"];
+  sensMinor = doc["sensitivity"]["minor"];
+  sensModerate = doc["sensitivity"]["moderate"];
+  sensSevere = doc["sensitivity"]["severe"];
+  Serial.printf("Config: heartbeatInterval=%lu, sensMinor=%.3f, sensModerate=%.3f, sensSevere=%.3f\n",
+                heartbeatInterval, sensMinor, sensModerate, sensSevere);
+  delay(500);
 
   // ─── Setup MPU6050 ─────────────────────────────────────────────
   Wire.begin(SDA_PIN, SCL_PIN);
@@ -106,8 +134,8 @@ void loop() {
     ESP.restart();
   }
 
-  // ─── Connectivity check every minute ──────────────────────────
-  if (now - lastConnectivityCheck >= CONNECTIVITY_INTERVAL) {
+  // ─── Connectivity check every interval ─────────────────────────
+  if (now - lastConnectivityCheck >= heartbeatInterval) {
     lastConnectivityCheck = now;
     HTTPClient http;
     WiFiClient client;
@@ -149,9 +177,9 @@ void loop() {
 
   // ─── Compute Δg and trigger ──────────────────────────────────
   float dev = max(fabs(ax), max(fabs(ay), fabs(az)));
-  if      (dev >= T_SEVERE)   reportEvent("severe",   dev);
-  else if (dev >= T_MODERATE) reportEvent("moderate", dev);
-  else if (dev >= T_MINOR)    reportEvent("minor",    dev);
+  if      (dev >= sensSevere)   reportEvent("severe",   dev);
+  else if (dev >= sensModerate) reportEvent("moderate", dev);
+  else if (dev >= sensMinor)    reportEvent("minor",    dev);
 
   delay(50);
 }
