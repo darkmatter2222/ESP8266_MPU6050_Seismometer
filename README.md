@@ -1,169 +1,164 @@
 # ESP8266 MPU6050 Seismometer
 
-A simple, end-to-end earthquake detector using an ESP8266 (NodeMCU) + MPU6050 IMU, reporting seismic events to a local Python Flask server — no external cloud required.
+A comprehensive, step-by-step guide to building, deploying, and debugging your ESP8266 + MPU6050 seismometer project entirely in Visual Studio Code.
 
 ---
 
-## ⚙️ Repository Structure
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Repository Overview](#repository-overview)
+3. [Setting Up Visual Studio Code](#setting-up-visual-studio-code)
+   - [Installing VS Code](#installing-vs-code)
+   - [Essential Extensions](#essential-extensions)
+   - [Configuring Settings](#configuring-settings)
+4. [Configuring the Arduino/ESP8266 Environment](#configuring-the-arduinoesp8266-environment)
+   - [PlatformIO Project Setup](#platformio-project-setup)
+   - [platformio.ini Explained](#platformioini-explained)
+   - [Managing Libraries](#managing-libraries)
+5. [Client Sketch (ESP8266 MPU6050 Code)](#client-sketch-esp8266-mpu6050-code)
+6. [Server Setup (Flask API)](#server-setup-flask-api)
+7. [Working with the Serial Monitor](#working-with-the-serial-monitor)
+8. [Debugging and Deployment](#debugging-and-deployment)
+9. [Troubleshooting Common Issues](#troubleshooting-common-issues)
+10. [License](#license)
+
+---
+
+## Prerequisites
+
+- **Visual Studio Code** installed on your system  
+- **Python 3.7+** (for Flask server)  
+- **NodeMCU (ESP8266)** board & **MPU6050** sensor module  
+- **USB cable** for flashing ESP8266
+
+---
+
+## Repository Overview
 
 ```
-.
+ESP8266_MPU6050_Seismometer/
+├── lib/                        # Third-party Arduino libraries
+├── src/                        # Client .ino sketch
+│   └── ESP8266_MPU6050_Seismometer.ino
+├── server/                     # Flask server files
+│   ├── .env
+│   ├── install.bat
+│   ├── requirements.txt
+│   ├── server.py
+│   └── startup.bat
+├── platformio.ini              # PlatformIO project config
 ├── .gitignore
-├── LICENSE
-├── README.md                     ← Updated README
-├── ESP8266_MPU6050_Seismometer.ino  ← Arduino client sketch
-├── arduino_secrets_template.h    ← copy to arduino_secrets.h
-└── server
-    ├── .env                      ← Environment vars (PORT, LOG_FILE, MAX_LOG_BYTES)
-    ├── install.bat               ← Sets up venv & installs deps
-    ├── requirements.txt          ← `Flask`, etc.
-    ├── server.py                 ← Flask API + window-timer logic
-    └── startup.bat               ← Run server on Windows startup
+└── LICENSE
 ```
 
 ---
 
-## 🔧 Configuration Variables
+## Setting Up Visual Studio Code
 
-### Client (Arduino)
-- **SECRET_SSID** / **SECRET_PASS**  
-  Your Wi-Fi network credentials.  
-- **URL**  
-  HTTP POST endpoint for seismic events, e.g.  
-  `http://<SERVER_IP>:3000/api/seismic`.  
-- **ROOT_URL**  
-  Base URL for health checks (must handle `GET /?id=<MAC>`).
+### Installing VS Code
 
-All defined in `arduino_secrets.h` (copy from the provided template).
+1. Download the installer from [Visual Studio Code](https://code.visualstudio.com/) and follow the standard installation process.  
+2. Launch VS Code once installed.
 
-### Server (Python)
-- **PORT**  
-  TCP port for Flask to listen on (default 3000).  
-- **LOG_FILE**  
-  Path to your event log file (e.g. `seismic.log`).  
-- **MAX_LOG_BYTES**  
-  Maximum size (in bytes) before skipping writes (default 20 MB).
+### Essential Extensions
 
-Define these in `server/.env` per the template.
+Install these from the Extensions view (`Ctrl+Shift+X`):
+
+- **PlatformIO IDE** for embedded development with ESP8266 citeturn2search0  
+- **C/C++ Extension Pack** for IntelliSense and debugging citeturn2search8  
+- **Python (ms-python.python)** for Flask and scripting citeturn3search1  
+
+### Configuring Settings
+
+1. Open **Settings** (`Ctrl+,`).  
+2. Enable **PlatformIO › IDE: Toolbar** to see Build/Upload icons.  
+3. Set `python.pythonPath` to your interpreter (e.g., `${workspaceFolder}/.venv/bin/python`).  
 
 ---
 
-## 🛠 Hardware & Wiring
+## Configuring the Arduino/ESP8266 Environment
 
-1. **ESP8266 NodeMCU**  
-2. **MPU6050** (3-axis accelerometer + gyroscope)  
-3. **Wiring**  
-   - MPU6050 SDA → D2 (GPIO4)  
-   - MPU6050 SCL → D1 (GPIO5)  
-   - VCC → 3.3 V  
-   - GND → GND  
+### PlatformIO Project Setup
 
----
+1. Verify `platformio.ini` is present at the root.  
+2. Open the folder in VS Code—look for the PlatformIO alien-head icon.  
+3. Use **PlatformIO: Build** (checkmark) to compile, and **PlatformIO: Upload** (arrow) to flash citeturn2search1turn2search2.
 
-## 📟 Client: ESP8266 + MPU6050 Sketch
+### platformio.ini Explained
 
-1. **Boot & Wi-Fi**  
-   - Connects to your SSID/PASS and prints `IP=` on success.  
-2. **LED Indicator**  
-   - Uses onboard blue LED (`LED_BUILTIN`, GPIO2) **active-LOW**:  
-     - **LOW** → LED ON (healthy)  
-     - **HIGH** → LED OFF (error)  
-3. **Sensor Setup & Calibration**  
-   - Configures MPU6050 via I2C (±2 g, DLPF BW=188 Hz).  
-   - Averages 2000 samples at 2 ms intervals to compute biases (meanX/Y/Z).  
-4. **Main Loop**  
-   - Every 50 ms:  
-     - Reads raw accel → de-bias → converts to _g_ (`/16384`).  
-     - Prints `Y,Z` to Serial Plotter (baud 115200).  
-     - Computes `Δg = max(|ax|,|ay|,|az|)`.  
-     - If above thresholds (0.035, 0.10, 0.50 g) it calls `reportEvent()`.
+```ini
+[platformio]
+default_envs = nodemcuv2
 
-5. **Health Check (every 60 s)**  
-   - Performs `HTTPClient.GET(ROOT_URL + "?id=" + MAC)`.  
-   - **200 →** LED ON; **205 or any other code →** LED OFF + `ESP.restart()`.
+[env:nodemcuv2]
+platform      = espressif8266
+board         = nodemcuv2
+framework     = arduino
+monitor_speed = 115200
+lib_deps =
+  jrowberg/I2Cdev @ ^1.1.0
+  adafruit/MPU6050 @ ^1.4.3
+```
 
-6. **Event Reporting**  
-   - Builds JSON:  
-     ```json
-     {
-       "id": "<MAC>",
-       "level": "minor|moderate|severe",
-       "deltaG": 0.123
-     }
-     ```  
-   - Posts to `URL`. On failure or non-201, turns LED OFF and restarts.
+- `default_envs` sets the environment for builds.  
+- `board` and `platform` define toolchains for NodeMCU citeturn2search7.  
+- `lib_deps` auto-downloads I2Cdev and MPU6050 libraries.
+
+### Managing Libraries
+
+- Place local libraries in `lib/`, or use `lib_deps` in `platformio.ini`.  
+- After editing `platformio.ini`, PlatformIO fetches/update dependencies automatically when building.
 
 ---
 
-## 🖥️ Server: Python Flask API
+## Client Sketch (ESP8266 MPU6050 Code)
 
-1. **`GET /` (root)**  
-   Returns:
-   ```json
-   { "status": "ok", "time": "<UTC ISO>" }
+See `src/ESP8266_MPU6050_Seismometer.ino` for:
+
+1. **Wi-Fi Connection** & MAC ID report  
+2. **MPU6050 Initialization** & calibration  
+3. **Event Detection** (`minor`, `moderate`, `severe`)  
+4. **Health Check** every 60s with HTTP GET to `ROOT_URL?id=<MAC>`  
+5. **JSON POST** of events to server endpoint  
+
+---
+
+## Server Setup (Flask API)
+
+1. Change into `server/` directory.  
+2. Copy `.env.example` to `.env` and set `PORT`, `LOG_FILE`, `MAX_LOG_BYTES`.  
+3. Run `install.bat` (Windows) or:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
    ```
-   for external monitoring.
-
-2. **`POST /api/seismic`**  
-   - Expects JSON:
-     ```json
-     { "id": "...", "level": "...", "deltaG": ... }
-     ```
-   - Logs each event with a UTC timestamp and alias (from `translation_dict`).
-   - **Window Logic:**  
-     - On the first event in a fresh window, prints `----- start`.  
-     - Collects all device IDs seen in 2 s via `threading.Timer`.  
-     - After 2 s, prints `----- end`. If **all** devices in `DEVICE_IDS` reported, logs/prints **green** `Confirmed!!!`.  
-
-3. **Aliases**  
-   Maps MAC → human name (e.g. “Ryan Office”) via `translation_dict`.
+4. Start server: `python server.py` or `startup.bat`.  
 
 ---
 
-## ⚙️ Dependencies & Installation
+## Working with the Serial Monitor
 
-### Client
-- Arduino IDE with ESP8266 support.  
-- MPU6050 + I2Cdev libraries.
-
-### Server
-```bash
-cd server
-install.bat        # on Windows, or:
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-startup.bat        # or: python server.py
-```
+- **PlatformIO Monitor**: click the plug icon or run `PlatformIO: Monitor`. citeturn2search3  
+- Serial output shows real-time accelerometer Y,Z and boot/health messages.
 
 ---
 
-## 🔄 Data Format
+## Debugging and Deployment
 
-**Client →** `POST /api/seismic`
-```json
-{
-  "id":     "<MAC>",
-  "level":  "minor"|"moderate"|"severe",
-  "deltaG": 0.123
-}
-```
-**Server** writes each entry to `LOG_FILE` with:
-- `"timestamp": "<UTC ISO>"`
-- `"alias": "<human name>"`
-
-When all devices report within a 2 s window, server appends:
-```json
-{
-  "timestamp": "<UTC ISO>",
-  "status":    "CONFIRMED",
-  "devices":   ["<MAC1>","<MAC2>",…],
-  "aliases":   ["<Name1>","<Name2>",…]
-}
-```
+- Set breakpoints in `server.py` and press **F5** to run Flask in debug mode.  
+- Use **Debug Console** to inspect variables during runtime.  
 
 ---
 
-## 📜 License
+## Troubleshooting Common Issues
 
-Apache-2.0
+- **COM Port Access Denied:** close other serial monitors or run VS Code as Administrator.  
+- **Long Path Errors:** move project to a shorter path (e.g., `C:\Projects\ESPSeismo`) or enable Windows long paths via Group Policy citeturn3search10.  
+
+---
+
+## License
+
+This project is licensed under the Apache-2.0 License.
