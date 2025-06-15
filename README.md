@@ -39,8 +39,8 @@ A comprehensive, step-by-step guide to building, deploying, and debugging your E
 ```
 ESP8266_MPU6050_Seismometer/
 ├── lib/                        # Third-party Arduino libraries
-├── src/                        # Client .ino sketch
-│   └── ESP8266_MPU6050_Seismometer.ino
+├── src/                        # Client .cpp sketch
+│   └── ESP8266_MPU6050_Seismometer.cpp
 ├── server/                     # Flask server files
 │   ├── .env
 │   ├── install.bat
@@ -114,7 +114,7 @@ lib_deps =
 
 ## Client Sketch (ESP8266 MPU6050 Code)
 
-See `src/ESP8266_MPU6050_Seismometer.ino` for:
+See `src/ESP8266_MPU6050_Seismometer.cpp` for:
 
 1. **Wi-Fi Connection** & MAC ID report  
 2. **MPU6050 Initialization** & calibration  
