@@ -3,3 +3,8 @@ pymongo
 python-dotenv
 pychromecast
 gTTS
+streamlit
+pandas
+requests
+plotly
+Flask-Cors

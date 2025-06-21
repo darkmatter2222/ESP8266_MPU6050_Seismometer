@@ -6,7 +6,12 @@ import json
 import threading
 from datetime import datetime
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import traceback
+# socket will be used to determine local LAN IP
+import socket
+
+# Performance tracking imports
 
 # Configuration
 PORT = int(os.getenv("PORT", 3000))
@@ -16,7 +21,6 @@ LOG_FILE = os.getenv(
 )
 MAX_LOG_BYTES = int(os.getenv("MAX_LOG_BYTES", 20 * 1024 * 1024))  # 20 MB
 
-# Global translation dict for MAC address aliases
 translation_dict = {
     "48:55:19:ED:D8:9A": "Ryan Office",
     "48:55:19:ED:9B:A9": "Bonus Room",
@@ -33,6 +37,9 @@ last_event_times = {}
 window_timer = None
 window_devices = set()
 
+# Record server start time
+start_time = datetime.utcnow()
+
 # Ensure log directory and file exist
 log_dir = os.path.dirname(LOG_FILE)
 if log_dir and not os.path.exists(log_dir):
@@ -40,6 +47,7 @@ if log_dir and not os.path.exists(log_dir):
 open(LOG_FILE, "a", encoding="utf-8").close()
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route("/", methods=["GET"])
 def root():
@@ -158,6 +166,57 @@ def init_config():
         }
     }
     return jsonify(config), 200
+
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    """Return online/offline status for each device based on last event time."""
+    now = datetime.utcnow()
+    hb = int(os.getenv("HEARTBEAT_INTERVAL", 60000)) / 1000.0
+    status = {}
+    for device in DEVICE_IDS:
+        last = last_event_times.get(device)
+        status[device] = "Online" if last and (now - last).total_seconds() <= 2 * hb else "Offline"
+    return jsonify(status), 200
+
+@app.route("/api/events", methods=["GET"])
+def api_events():
+    """Return all logged events from the log file."""
+    events = []
+    with open(LOG_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                events.append(json.loads(line))
+            except:
+                continue
+    return jsonify(events), 200
+
+# Helper to determine local LAN IP
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # doesn't have to connect to succeed
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+@app.route("/api/info", methods=["GET"])
+def api_info():
+    """Return server hosting info, uptime, and local IP."""
+    host_url = request.host_url
+    uptime = (datetime.utcnow() - start_time).total_seconds()
+    local_ip = get_local_ip()
+    info = {
+        "host_url": host_url,
+        "api_port": PORT,
+        "ui_port": int(os.getenv("UI_PORT", 8501)),
+        "local_ip": local_ip,
+        "uptime_seconds": uptime
+    }
+    return jsonify(info), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
