@@ -8,3 +8,4 @@ pandas
 requests
 plotly
 Flask-Cors
+streamlit-autorefresh

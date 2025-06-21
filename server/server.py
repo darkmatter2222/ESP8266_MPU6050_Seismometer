@@ -52,6 +52,11 @@ CORS(app)
 @app.route("/", methods=["GET"])
 def root():
     """Simple health check for the root URL."""
+    # record heartbeat if id provided
+    device_id = request.args.get("id")
+    if device_id:
+        translation_dict.setdefault(device_id, "")
+        last_event_times[device_id] = datetime.utcnow()
     return jsonify({"status": "ok", "time": datetime.utcnow().isoformat() + "Z"}), 200
 
 def on_window_end():
@@ -152,6 +157,9 @@ def init_config():
         return jsonify({"error": "Missing id parameter"}), 400
     # ensure device known
     translation_dict.setdefault(device_id, "")
+    # record heartbeat timestamp for status
+    now_dt = datetime.utcnow()
+    last_event_times[device_id] = now_dt
     # load configurable params (ms and g thresholds)
     heartbeat_interval = int(os.getenv("HEARTBEAT_INTERVAL", 60000))
     sens_minor = float(os.getenv("SENSITIVITY_MINOR", 0.035))
@@ -171,12 +179,30 @@ def init_config():
 def api_status():
     """Return online/offline status for each device based on last event time."""
     now = datetime.utcnow()
-    hb = int(os.getenv("HEARTBEAT_INTERVAL", 60000)) / 1000.0
-    status = {}
+    # 2-minute threshold for heartbeat
+    threshold = int(os.getenv("STATUS_THRESHOLD_SECONDS", 120))
+    resp = {}
     for device in DEVICE_IDS:
         last = last_event_times.get(device)
-        status[device] = "Online" if last and (now - last).total_seconds() <= 2 * hb else "Offline"
-    return jsonify(status), 200
+        online = last and (now - last).total_seconds() <= threshold
+        resp[device] = {"alias": translation_dict.get(device, ""), "status": "Online" if online else "Offline"}
+    return jsonify(resp), 200
+
+# HTTP traffic logs in-memory
+http_logs = []  # list of dicts {timestamp, endpoint}
+
+@app.before_request
+def log_http_traffic():
+    # only log API calls
+    if request.path.startswith('/api'):
+        ts = datetime.utcnow().isoformat() + 'Z'
+        http_logs.append({'timestamp': ts, 'endpoint': request.path})
+
+@app.route("/api/http_logs", methods=["GET"])
+def api_http_logs():
+    """Return recent HTTP API call logs."""
+    # Return a copy to avoid mutation issues
+    return jsonify(http_logs), 200
 
 @app.route("/api/events", methods=["GET"])
 def api_events():
