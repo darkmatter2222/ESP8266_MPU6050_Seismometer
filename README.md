@@ -68,29 +68,29 @@ Connect the NodeMCU pins to the MPU6050 as follows:
 
 Below is a high-level flow of how the ESP8266 client, Flask server, and Streamlit dashboard interact:
 
-```mermaid
-flowchart LR
-    subgraph Client [ESP8266 Client]
-        A1[Read MPU6050] --> A2[Detect ΔG Event]
-        A2 --> A3[POST /api/seismic]
-        A2 --> A4[Heartbeat: GET /?id=MAC]
-    end
+```text
+Architecture Diagram (ASCII)
 
-    subgraph Server [Flask API]
-        B1[/api/seismic] --> B2[Log Event to file]
-        B3[/] --> B4[Update Heartbeat Status]
-        B2 --> B5[Window Timer → Consensus]
-        B2 --> B6[Append events.txt]
-    end
-
-    subgraph Dashboard [Streamlit UI]
-        C1[Fetch status, events, http_logs] --> C2[Process & Filter Data]
-        C2 --> C3[Render Charts & Tables]
-    end
-
-    A3 --> B1
-    A4 --> B3
-    B2 --> C1
+   ESP8266 Client           Flask API Server            Streamlit Dashboard
+   +---------------+        +-----------------+         +-----------------------+
+   | Read MPU6050  |        | Receive POST    |         | Fetch /api/status,    |
+   | Detect ΔG     | -----> | /api/seismic    | ----->  | /api/events, http_logs|
+   | Heartbeat     | --+    | Log event file  |         | Process & render UI   |
+   +---------------+   |    | Update heartbeat|         | Charts & tables       |
+                       |    +-----------------+         +-----------------------+
+                       |           ^                          ^
+                       +-----------|--------------------------|
+                                   v                          |
+                             +-----------------+             |
+                             | Consensus logic |             |
+                             | (2s window all  |             |
+                             |  devices heard) |             |
+                             +-----------------+             |
+                                                             |
+    +--------------------------------------------------------+
+    | Data flow: Events & status propagate from client →     |
+    |    server  → dashboard for visualization.              |
+    +--------------------------------------------------------+
 ```
 
 ---
