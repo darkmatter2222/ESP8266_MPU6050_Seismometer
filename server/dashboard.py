@@ -249,6 +249,17 @@ if not df_window.empty:
     # add vertical consensus lines behind markers
     for ts in consensus_df['timestamp']:
         fig_delta.add_vline(x=ts, line_color='red', line_width=1, opacity=0.6)
+    # add neon-pink dotted lines at each midnight UTC
+    # generate midnights from window start to current UTC day
+    midnights = pd.date_range(start=start.normalize(), end=now.normalize(), freq='D', tz='UTC')
+    for md in midnights:
+        fig_delta.add_vline(
+            x=md,
+            line_color='#ff00ff',
+            line_width=1,
+            line_dash='dot',
+            opacity=0.5
+        )
     # refine axes and transparent background
     fig_delta.update_layout(
         xaxis=dict(showgrid=False, tickformat="%Y-%m-%d\n%H:%M:%S"),
@@ -258,6 +269,36 @@ if not df_window.empty:
         margin=dict(l=20,r=20,t=30,b=20)
     )
     st.plotly_chart(fig_delta, use_container_width=True)
+    # Box plot interval selector and chart (default: Daily)
+    interval = st.selectbox(
+        "Box Plot Interval",
+        ["Daily", "Weekly", "Hourly"],
+        index=0,
+        key='box_interval'
+    )
+    df_box = df_window.copy()
+    if interval == "Daily":
+        df_box['period'] = df_box['timestamp'].dt.date
+    elif interval == "Weekly":
+        df_box['period'] = df_box['timestamp'].dt.to_period('W').apply(lambda r: r.start_time)
+    else:  # Hourly
+        df_box['period'] = df_box['timestamp'].dt.floor('H')
+    fig_box = px.box(
+        df_box,
+        x='period',
+        y='deltaG',
+        template='plotly_dark'
+    )
+    # annotate mean on box plot
+    fig_box.update_traces(boxmean=True)
+    fig_box.update_layout(
+         xaxis_title='Period',
+         yaxis_title='ΔG',
+         plot_bgcolor='rgba(0,0,0,0)',
+         paper_bgcolor='rgba(0,0,0,0)',
+         margin=dict(l=20,r=20,t=30,b=20)
+     )
+    st.plotly_chart(fig_box, use_container_width=True)
 
 # Consensus Events (full width) below
 st.markdown("---")
