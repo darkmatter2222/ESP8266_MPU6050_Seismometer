@@ -97,22 +97,34 @@ Architecture Diagram (ASCII)
 
 ## Repository Overview
 
-```
+```text
 ESP8266_MPU6050_Seismometer/
-├── lib/                        # Third-party Arduino libraries
-├── src/                        # Client .cpp sketch
-│   └── ESP8266_MPU6050_Seismometer.cpp
-├── server/                     # Flask server files
-│   ├── .env
-│   ├── install.bat
-│   ├── requirements.txt
-│   ├── server.py
-│   └── startup.bat
-├── platformio.ini              # PlatformIO project config
+├── Deploy.cmd             # Windows batch deploy helper
+├── Deploy.ps1             # PowerShell deploy helper
+├── images/                # Infographics and screenshots
+│   ├── infographic.png
+│   ├── UI.png
+│   └── node.jpg
+├── lib/                   # Third-party Arduino libraries
+│   ├── ArduinoJson/
+│   ├── I2Cdev/
+│   └── MPU6050/
+├── src/                   # ESP8266 client firmware
+│   ├── arduino_secrets_template.h  # sample credentials
+│   ├── arduino_secrets.h           # your Wi-Fi secrets (gitignored)
+│   └── ESP8266_MPU6050_Seismometer.cpp  # main sketch
+├── server/                # Flask API & Streamlit dashboard
+│   ├── .env               # environment variables (copy from .env.example)
+│   ├── install.bat        # Windows install script
+│   ├── requirements.txt   # Python dependencies
+│   ├── server.py          # Flask backend for events & status
+│   ├── dashboard.py       # Streamlit UI code
+│   └── startup.bat        # Launches Flask & Streamlit + Edge fullscreen
+├── platformio.ini         # PlatformIO build & library config
+├── README.md              # Project overview (this file)
 ├── .gitignore
 └── LICENSE
 ```
-
 ---
 
 ## Setting Up Visual Studio Code
