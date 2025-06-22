@@ -166,11 +166,22 @@ for _, ev in df_window.sort_values('timestamp').iterrows():
             consensus_times.append(ts_c)
 # Build consensus_df and map IDs to aliases for display
 consensus_df = pd.DataFrame({'timestamp': consensus_times})
-if not consensus_df.empty:
-    # build alias map to avoid duplicate labels and use fetch_statuses
-    alias_map = {dev: fetch_statuses().get(dev, {}).get('alias') or dev for dev in device_ids}
-    aliases = [alias_map.get(dev, dev) for dev in device_ids]
-    consensus_df['Devices'] = [aliases for _ in range(len(consensus_df))]
+# Build detailed consensus events for each consensus timestamp
+consensus_details = []
+for ts in consensus_times:
+    # window for this consensus
+    win_start = ts - pd.Timedelta(seconds=2)
+    win_end = ts
+    subset = df_window[(df_window['timestamp'] >= win_start) & (df_window['timestamp'] <= win_end)]
+    for _, row in subset.iterrows():
+        consensus_details.append({
+            'ConsensusTime': ts,
+            'Timestamp': row['timestamp'],
+            'Alias': row['alias'],
+            'DeltaG': row['deltaG'],
+            'Level': row['level']
+        })
+consensus_details_df = pd.DataFrame(consensus_details)
 
 # Compute key metrics based on df_window after period change
 total_events = len(df_window)
@@ -250,8 +261,13 @@ if not df_window.empty:
 # Consensus Events (full width) below
 st.markdown("---")
 st.subheader("Consensus Events")
-if not consensus_df.empty:
-    st.table(consensus_df[['Devices']].rename_axis('Timestamp'))
+if not consensus_details_df.empty:
+    # show all events that triggered each consensus, grouped by window
+    consensus_details_df = consensus_details_df.sort_values(['ConsensusTime','Timestamp'])
+    consensus_details_df['ConsensusTime'] = consensus_details_df['ConsensusTime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    consensus_details_df['Timestamp'] = consensus_details_df['Timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    consensus_details_df = consensus_details_df.set_index(['ConsensusTime','Timestamp'])
+    st.table(consensus_details_df)
 else:
     st.markdown("_No consensus events_")
 

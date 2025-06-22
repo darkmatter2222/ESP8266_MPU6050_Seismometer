@@ -1,6 +1,7 @@
 # ESP8266 MPU6050 Seismometer
 
 ![Infographic](images/infographic.png)
+![Infographic](images/UI.png)
 ![Infographic](images/node.jpg)
 
 ---
