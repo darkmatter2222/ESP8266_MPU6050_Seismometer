@@ -124,7 +124,8 @@ http_window = http_df[pd.to_datetime(http_df['timestamp']) >= start]
 # Node status and history selector side by side (narrower status)
 status_col, hist_col = st.columns([2,1])
 with hist_col:
-    period = st.selectbox("History Window", ["Real-time (24h)", "7 days", "15 days", "30 days"], key='period')
+    # default index=1 to select '7 days'
+    period = st.selectbox("History Window", ["Real-time (24h)", "7 days", "15 days", "30 days"], index=1, key='period')
 with status_col:
     st.subheader("Nodes Status")
     for dev, info in fetch_statuses().items():
