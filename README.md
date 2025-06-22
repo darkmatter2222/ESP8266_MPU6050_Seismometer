@@ -25,21 +25,18 @@
 ## Table of Contents
 
 1. [Prerequisites](#prerequisites)
-2. [Repository Overview](#repository-overview)
-3. [Setting Up Visual Studio Code](#setting-up-visual-studio-code)
-   - [Installing VS Code](#installing-vs-code)
-   - [Essential Extensions](#essential-extensions)
-   - [Configuring Settings](#configuring-settings)
-4. [Configuring the Arduino/ESP8266 Environment](#configuring-the-arduinoesp8266-environment)
-   - [PlatformIO Project Setup](#platformio-project-setup)
-   - [platformio.ini Explained](#platformioini-explained)
-   - [Managing Libraries](#managing-libraries)
-5. [Client Sketch (ESP8266 MPU6050 Code)](#client-sketch-esp8266-mpu6050-code)
-6. [Server Setup (Flask API)](#server-setup-flask-api)
-7. [Working with the Serial Monitor](#working-with-the-serial-monitor)
-8. [Debugging and Deployment](#debugging-and-deployment)
-9. [Troubleshooting Common Issues](#troubleshooting-common-issues)
-10. [License](#license)
+2. [Wiring Diagram](#wiring-diagram)
+3. [Repository Overview](#repository-overview)
+4. [Setting Up Visual Studio Code](#setting-up-visual-studio-code)
+5. [Configuring the Arduino/ESP8266 Environment](#configuring-the-arduinoesp8266-environment)
+6. [Client Sketch (ESP8266 MPU6050 Code)](#client-sketch-esp8266-mpu6050-code)
+7. [Server & Dashboard (Flask API + Streamlit UI)](#server--dashboard-flask-api--streamlit-ui)
+8. [🚀 Launch Dashboard](#launch-dashboard)
+9. [Dashboard UI Features](#dashboard-ui-features)
+10. [Working with the Serial Monitor](#working-with-the-serial-monitor)
+11. [Debugging and Deployment](#debugging-and-deployment)
+12. [Troubleshooting Common Issues](#troubleshooting-common-issues)
+13. [License](#license)
 
 ---
 
@@ -49,6 +46,52 @@
 - **Python 3.7+** (for Flask server)  
 - **NodeMCU (ESP8266)** board & **MPU6050** sensor module  
 - **USB cable** for flashing ESP8266
+
+---
+
+## Wiring Diagram
+
+Connect the NodeMCU pins to the MPU6050 as follows:
+
+| NodeMCU Pin    | MPU6050 Pin | Description            |
+| -------------- | ----------- | ---------------------- |
+| 3V3            | VCC         | 3.3V Power             |
+| GND            | GND         | Ground                 |
+| D2 (GPIO4)     | SDA         | I2C Data Line          |
+| D1 (GPIO5)     | SCL         | I2C Clock Line         |
+|                |             |                        |
+| **Wiring Note:** Use 4.7kΩ pull-up resistors on SDA/SCL if your breakout board does not include them.
+
+---
+
+## Architecture Diagram
+
+Below is a high-level flow of how the ESP8266 client, Flask server, and Streamlit dashboard interact:
+
+```mermaid
+flowchart LR
+    subgraph Client [ESP8266 Client]
+        A1[Read MPU6050] --> A2[Detect ΔG Event]
+        A2 --> A3[POST /api/seismic]
+        A2 --> A4[GET /?id=<MAC> (Heartbeat)]
+    end
+
+    subgraph Server [Flask API]
+        B1[/api/seismic] --> B2[Log Event to file]
+        B3[/] --> B4[Update Heartbeat Status]
+        B2 --> B5[Window Timer → Consensus]
+        B2 --> B6[Append events.txt]
+    end
+
+    subgraph Dashboard [Streamlit UI]
+        C1[Fetch status, events, http_logs] --> C2[Process & Filter Data]
+        C2 --> C3[Render Charts & Tables]
+    end
+
+    A3 --> B1
+    A4 --> B3
+    B2 --> C1
+```
 
 ---
 
@@ -142,17 +185,45 @@ See `src/ESP8266_MPU6050_Seismometer.cpp` for:
 
 ---
 
-## Server Setup (Flask API)
+## Server & Dashboard (Flask API + Streamlit UI)
 
-1. Change into `server/` directory.  
-2. Copy `.env.example` to `.env` and set `PORT`, `LOG_FILE`, `MAX_LOG_BYTES`.  
-3. Run `install.bat` (Windows) or:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-4. Start server: `python server.py` or `startup.bat`.  
+- **Flask API** (port 3000): serves endpoints for status, events, and HTTP logs.
+- **Streamlit Dashboard** (port 8501): visualizes real-time sensor data and system metrics.
+
+### Flask API Endpoints
+
+| Endpoint               | Method | Description                                      |
+| ---------------------- | ------ | ------------------------------------------------ |
+| `/api/status`          | GET    | Returns online/offline status of each node       |
+| `/api/events`          | GET    | Returns raw ΔG events and confirmed consensus    |
+| `/api/http_logs`       | GET    | Returns recent API call logs timestamped by endpoint |
+| `/`                    | GET    | Heartbeat endpoint for clients (with `?id=<MAC>`) |
+
+### Streamlit Dashboard
+
+- **Auto-refresh** every 60 s to pull new data.
+- **History Window Selector:** choose Real-time (24 h), 7 d, 15 d, 30 d.
+- **Full-screen Launch:** automated via `startup.bat` in Edge kiosk mode.
+
+---
+
+## 🚀 Launch Dashboard
+
+- Run `server\startup.bat` to start both Flask and Streamlit servers.
+- Access the dashboard at `http://localhost:8501` in Microsoft Edge.
+
+---
+
+## Dashboard UI Features
+
+- **Node Status Chips:** horizontally aligned indicators with neon-green/red glass panels.
+- **Key Metrics Cards:** Total Events, Time Since Last Event (D/H/M/S), Time Since Last Consensus, Max ΔG.
+- **History Selector:** select time window to filter all charts and tables.
+- **ΔG Scatter Chart:** individual markers by event, custom symbols for `minor`, `moderate`, `severe`, transparent background, vertical red lines marking consensus windows.
+- **Consensus Events Table:** grouped rows of all node readings within each 2 s consensus window, showing Timestamp, Alias, ΔG, and Severity.
+- **HTTP Traffic Chart:** full-width area chart resampled per minute by endpoint, transparent, no borders.
+- **Recent ΔG Reports:** table of latest ΔG events with minutes since occurrence.
+- **Cyberpunk Theme:** glassmorphism panels, neon Orbitron fonts, animated backdrop, pixel-perfect spacing, no default Streamlit chrome.
 
 ---
 
