@@ -73,7 +73,7 @@ flowchart LR
     subgraph Client [ESP8266 Client]
         A1[Read MPU6050] --> A2[Detect ΔG Event]
         A2 --> A3[POST /api/seismic]
-        A2 --> A4[GET /?id=<MAC> (Heartbeat)]
+        A2 --> A4[Heartbeat: GET /?id=MAC]
     end
 
     subgraph Server [Flask API]
