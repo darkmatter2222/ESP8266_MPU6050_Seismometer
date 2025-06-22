@@ -1,12 +1,24 @@
 # ESP8266 MPU6050 Seismometer
 
 ![Infographic](images/infographic.png)
-![Infographic](images/UI.png)
+![Dashboard](images/UI.png)
 ![Infographic](images/node.jpg)
 
----
+**🌟 Full-Stack Cyberpunk Seismometer:** NodeMCU (ESP8266) + MPU6050 with Flask API and a stunning Streamlit dashboard.
 
-A comprehensive, step-by-step guide to building, deploying, and debugging your ESP8266 + MPU6050 seismometer project entirely in Visual Studio Code.
+**💡 Why This Project?**
+- Beginner-friendly end-to-end guide in VS Code.
+- Real-time & historical ΔG charts with consensus detection.
+- Automated dashboard launch in Microsoft Edge full-screen.
+
+**🚀 Get Started in Minutes:**
+1. **Clone Repo**: `git clone https://github.com/yourusername/ESP8266_MPU6050_Seismometer.git`
+2. **Install Prerequisites** (see below).
+3. **Build & Flash** the ESP8266 sketch via PlatformIO.
+4. **Run Server & Dashboard**: `server\startup.bat`.
+5. **View Dashboard** at `http://localhost:8501` in Edge.
+
+⭐️ **If you find this project useful, please give it a star and follow for more!** ⭐️
 
 ---
 
