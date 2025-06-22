@@ -121,21 +121,37 @@ start = now - {
 df_window = df[(df['timestamp'] >= start) & df['alias'].notnull()]
 http_window = http_df[pd.to_datetime(http_df['timestamp']) >= start]
 
-# Node status and history selector side by side (narrower status)
-status_col, hist_col = st.columns([2,1])
-with hist_col:
-    # default index=1 to select '7 days'
-    period = st.selectbox("History Window", ["Real-time (24h)", "7 days", "15 days", "30 days"], index=1, key='period')
-with status_col:
-    st.subheader("Nodes Status")
-    for dev, info in fetch_statuses().items():
-        alias = info.get('alias', dev)
-        stat = info.get('status', 'Offline')
-        color_val = '#00ff00' if stat == 'Online' else '#ff0044'
-        st.markdown(
-            f"<span style='color:{color_val};font-size:16px;margin-right:1rem'>{alias}: {stat}</span>",
-            unsafe_allow_html=True
+# Placeholders to maintain layout
+status_container = st.container()
+metrics_container = st.container()
+delta_container = st.container()
+consensus_container = st.container()
+http_container = st.container()
+recent_container = st.container()
+
+# History selector and Node Status
+with status_container:
+    # History window and timezone selectors side by side
+    cols = st.columns([2,2,1])
+    with cols[2]:
+        period = st.selectbox(
+            "History Window", ["Real-time (24h)", "7 days", "15 days", "30 days"],
+            index=1, key='period'
         )
+        tz = st.selectbox(
+            "Timezone", ["UTC", "US/Eastern", "US/Central", "US/Mountain", "US/Pacific"],
+            index=1, key='tz'
+        )
+    with cols[0]:
+        st.subheader("Nodes Status")
+        for dev, info in fetch_statuses().items():
+            alias = info.get('alias', dev)
+            stat = info.get('status', 'Offline')
+            color_val = '#00ff00' if stat == 'Online' else '#ff0044'
+            st.markdown(
+                f"<span style='color:{color_val};font-size:16px;margin-right:1rem'>{alias}: {stat}</span>", unsafe_allow_html=True
+            )
+
 # After selector/status, re-filter df_window based on updated period
 start = now - {
     "Real-time (24h)": pd.Timedelta(hours=24),
@@ -184,6 +200,13 @@ for ts in consensus_times:
         })
 consensus_details_df = pd.DataFrame(consensus_details)
 
+# Convert display timestamps to selected timezone
+display_tz = st.session_state.get('tz', 'US/Eastern')
+df_window_tz = df_window.copy()
+df_window_tz['timestamp'] = df_window_tz['timestamp'].dt.tz_convert(display_tz)
+http_window_tz = http_window.copy()
+http_window_tz['timestamp'] = pd.to_datetime(http_window_tz['timestamp'], utc=True).dt.tz_convert(display_tz)
+
 # Compute key metrics based on df_window after period change
 total_events = len(df_window)
 # time since last event
@@ -209,11 +232,12 @@ else:
 max_delta = round(df_window['deltaG'].max(),3) if not df_window.empty else None
 
 ## Display key metrics
-keys = st.columns(4)
-keys[0].metric('Total Events', total_events)
-keys[1].metric('Time Since Last Event', time_since_last if time_since_last is not None else '-')
-keys[2].metric('Time Since Last Consensus', time_since_consensus if time_since_consensus is not None else '-')
-keys[3].metric('Max ΔG', f"{max_delta}" if max_delta is not None else '-')
+with metrics_container:
+    keys = st.columns(4)
+    keys[0].metric('Total Events', total_events)
+    keys[1].metric('Time Since Last Event', time_since_last if time_since_last is not None else '-')
+    keys[2].metric('Time Since Last Consensus', time_since_consensus if time_since_consensus is not None else '-')
+    keys[3].metric('Max ΔG', f"{max_delta}" if max_delta is not None else '-')
 
 # Compute statuses based on last 5min heartbeat
 # Determine online status: heartbeat in past 5 min
@@ -230,45 +254,31 @@ for device in devices:
         statuses[device] = "Online" if delta <= 5*60 else "Offline"
 
 # ΔG Over Time (full width) with refined axis formatting
-st.markdown("---")
-st.subheader("ΔG Over Time")
-if not df_window.empty:
-    ## sort events chronologically
-    df_window = df_window.sort_values('timestamp')
-    fig_delta = px.scatter(
-        df_window,
-        x="timestamp",
-        y="deltaG",
-        color="alias",
-        symbol="level",
-        symbol_map={'minor':'x','moderate':'cross','severe':'star'},
-        template="plotly_dark",
-        opacity=0.8
-    )
-    fig_delta.update_traces(mode='markers', marker=dict(size=6))
-    # add vertical consensus lines behind markers
-    for ts in consensus_df['timestamp']:
-        fig_delta.add_vline(x=ts, line_color='red', line_width=1, opacity=0.6)
-    # add neon-pink dotted lines at each midnight UTC
-    # generate midnights from window start to current UTC day
-    midnights = pd.date_range(start=start.normalize(), end=now.normalize(), freq='D', tz='UTC')
-    for md in midnights:
-        fig_delta.add_vline(
-            x=md,
-            line_color='#ff00ff',
-            line_width=1,
-            line_dash='dot',
-            opacity=0.5
+with delta_container:
+    st.markdown("---")
+    st.subheader("ΔG Over Time")
+    if not df_window_tz.empty:
+        df_window_disp = df_window_tz.sort_values('timestamp')
+        fig_delta = px.scatter(
+            df_window_disp, x="timestamp", y="deltaG", color="alias", symbol="level",
+            symbol_map={'minor':'x','moderate':'cross','severe':'star'},
+            template="plotly_dark", opacity=0.8
         )
-    # refine axes and transparent background
-    fig_delta.update_layout(
-        xaxis=dict(showgrid=False, tickformat="%Y-%m-%d\n%H:%M:%S"),
-        yaxis=dict(showgrid=False, title="ΔG"),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=20,r=20,t=30,b=20)
-    )
-    st.plotly_chart(fig_delta, use_container_width=True)
+        fig_delta.update_traces(mode='markers', marker=dict(size=6))
+        # plot consent lines converted to display timezone
+        consensus_times_tz = consensus_df['timestamp'].dt.tz_convert(display_tz)
+        for ts in consensus_times_tz:
+            fig_delta.add_vline(x=ts, line_color='red', line_width=1, opacity=0.6)
+        midnights = pd.date_range(start=start.normalize(), end=now.normalize(), freq='D', tz='UTC')
+        for md in midnights:
+            fig_delta.add_vline(x=md, line_color='#ff00ff', line_width=1, line_dash='dot', opacity=0.5)
+        fig_delta.update_layout(
+            xaxis=dict(showgrid=False, tickformat="%Y-%m-%d\n%H:%M:%S"),
+            yaxis=dict(showgrid=False, title="ΔG"),
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=20,r=20,t=30,b=20)
+        )
+        st.plotly_chart(fig_delta, use_container_width=True)
     # Box plot interval selector and chart (default: Daily)
     interval = st.selectbox(
         "Box Plot Interval",
@@ -276,7 +286,7 @@ if not df_window.empty:
         index=0,
         key='box_interval'
     )
-    df_box = df_window.copy()
+    df_box = df_window_tz.copy()
     if interval == "Daily":
         df_box['period'] = df_box['timestamp'].dt.date
     elif interval == "Weekly":
@@ -289,45 +299,47 @@ if not df_window.empty:
         y='deltaG',
         template='plotly_dark'
     )
-    # annotate mean on box plot
     fig_box.update_traces(boxmean=True)
     fig_box.update_layout(
-         xaxis_title='Period',
-         yaxis_title='ΔG',
-         plot_bgcolor='rgba(0,0,0,0)',
-         paper_bgcolor='rgba(0,0,0,0)',
-         margin=dict(l=20,r=20,t=30,b=20)
-     )
+        xaxis_title='Period', yaxis_title='ΔG',
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=20,r=20,t=30,b=20)
+    )
     st.plotly_chart(fig_box, use_container_width=True)
 
 # Consensus Events (full width) below
-st.markdown("---")
-st.subheader("Consensus Events")
-if not consensus_details_df.empty:
-    # show all events that triggered each consensus, grouped by window
-    consensus_details_df = consensus_details_df.sort_values(['ConsensusTime','Timestamp'])
-    consensus_details_df['ConsensusTime'] = consensus_details_df['ConsensusTime'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    consensus_details_df['Timestamp'] = consensus_details_df['Timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    consensus_details_df = consensus_details_df.set_index(['ConsensusTime','Timestamp'])
-    st.table(consensus_details_df)
-else:
-    st.markdown("_No consensus events_")
+with consensus_container:
+    st.markdown("---")
+    st.subheader("Consensus Events")
+    if not consensus_details_df.empty:
+        # convert to display timezone
+        ct = consensus_details_df.copy()
+        ct['ConsensusTime'] = ct['ConsensusTime'].dt.tz_convert(display_tz)
+        ct['Timestamp'] = ct['Timestamp'].dt.tz_convert(display_tz)
+        ct = ct.sort_values(['ConsensusTime','Timestamp'])
+        ct['ConsensusTime'] = ct['ConsensusTime'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        ct['Timestamp'] = ct['Timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        st.table(ct.set_index(['ConsensusTime','Timestamp']))
+    else:
+        st.markdown("_No consensus events_")
 
 # HTTP traffic full width below
-st.markdown("---")
-st.subheader("HTTP Traffic Volume by Endpoint (1-min)")
-if not http_window.empty:
-    df_http = http_window.set_index("timestamp").groupby("endpoint").resample("1min")["endpoint"].count().reset_index(name="count")
-    fig_http = px.area(df_http, x="timestamp", y="count", color="endpoint", template="plotly_dark")
-    st.plotly_chart(fig_http, use_container_width=True)
+with http_container:
+    st.markdown("---")
+    st.subheader("HTTP Traffic Volume by Endpoint")
+    if not http_window_tz.empty:
+        df_http = http_window_tz.set_index("timestamp").groupby("endpoint").resample("1min")["endpoint"].count().reset_index(name="count")
+        fig_http = px.area(df_http, x="timestamp", y="count", color="endpoint", template="plotly_dark")
+        st.plotly_chart(fig_http, use_container_width=True)
 
 # Recent DeltaG Reports with minutes since event
-st.markdown("---")
-st.subheader("Recent DeltaG Reports")
-recent = df_window[df_window["deltaG"].notnull()].copy()
-if not recent.empty:
-    recent['min_since'] = recent['timestamp'].apply(lambda t: math.floor((now - t).total_seconds()/60))
-    recent = recent.sort_values("timestamp", ascending=False).head(10)
-    st.table(recent.set_index("timestamp")[['alias','deltaG','min_since']].rename(columns={'min_since':'Min Since (min)'}))
-else:
-    st.markdown("_No deltaG reports_")
+with recent_container:
+    st.markdown("---")
+    st.subheader("Recent DeltaG Reports")
+    recent = df_window[df_window["deltaG"].notnull()].copy()
+    if not recent.empty:
+        recent['min_since'] = recent['timestamp'].apply(lambda t: math.floor((now - t).total_seconds()/60))
+        recent = recent.sort_values("timestamp", ascending=False).head(10)
+        st.table(recent.set_index("timestamp")[['alias','deltaG','min_since']].rename(columns={'min_since':'Min Since (min)'}))
+    else:
+        st.markdown("_No deltaG reports_")
