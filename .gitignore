@@ -35,3 +35,4 @@ arduino_secrets.h
 .vscode/
 *.env
 server/.env
+*.envtemp
