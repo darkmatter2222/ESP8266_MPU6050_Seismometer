@@ -34,3 +34,4 @@ arduino_secrets.h
 .pio/
 .vscode/
 *.env
+server/.env
