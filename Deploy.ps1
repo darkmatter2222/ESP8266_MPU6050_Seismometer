@@ -102,7 +102,9 @@ $frontendFiles = @(
     'frontend/index.html',
     'frontend/src/main.jsx',
     'frontend/src/App.jsx',
-    'frontend/src/App.css'
+    'frontend/src/App.css',
+    'frontend/src/Admin.jsx',
+    'frontend/src/Admin.css'
 )
 
 foreach ($file in $frontendFiles) {

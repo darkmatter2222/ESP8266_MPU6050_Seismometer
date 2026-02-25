@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
@@ -137,6 +138,7 @@ function Panel({ title, children, className = '' }) {
 // ╚══════════════════════════════════════════════════════════════════╝
 export default function App() {
   // ── State ──────────────────────────────────────────────────────
+  const navigate = useNavigate();
   const [events, setEvents] = useState([]);
   const [statuses, setStatuses] = useState({});
   const [httpLogs, setHttpLogs] = useState([]);
@@ -340,6 +342,7 @@ export default function App() {
           )}
         </div>
         <div className="header-right">
+          <button className="admin-link" onClick={() => navigate('/admin')}>⚙ Config</button>
           <div className="period-toggle">
             {PERIODS.map(p => (
               <button
