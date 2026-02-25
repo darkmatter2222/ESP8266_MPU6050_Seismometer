@@ -8,7 +8,9 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const http = require('http');
 const { MongoClient } = require('mongodb');
+const { Server: SocketIO } = require('socket.io');
 
 // ── Configuration ────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -33,10 +35,18 @@ let windowDevices = new Set();
 let eventsCol = null;   // seismic events + consensus entries
 let httpLogsCol = null; // API traffic logs
 
-// ── Express setup ────────────────────────────────────────────────
+// ── Express + Socket.IO setup ────────────────────────────────────
 const app = express();
+const server = http.createServer(app);
+const io = new SocketIO(server, { cors: { origin: '*' } });
 app.use(cors());
 app.use(express.json());
+
+// Socket.IO connection logging
+io.on('connection', (socket) => {
+  console.log(`[WS] client connected: ${socket.id}`);
+  socket.on('disconnect', () => console.log(`[WS] client disconnected: ${socket.id}`));
+});
 
 // HTTP traffic logging middleware
 app.use((req, res, next) => {
@@ -53,6 +63,8 @@ app.get('/', (req, res, next) => {
     const id = req.query.id;
     if (!translationDict[id]) translationDict[id] = id;
     lastEventTimes[id] = new Date();
+    // Notify dashboard of heartbeat
+    io.emit('device:heartbeat', { id, alias: translationDict[id], time: new Date().toISOString() });
     return res.json({ status: 'ok', time: new Date().toISOString() });
   }
   next();
@@ -69,7 +81,10 @@ async function onWindowEnd() {
       devices: DEVICE_IDS,
       aliases: DEVICE_IDS.map(d => translationDict[d] || d),
     };
-    try { await eventsCol.insertOne(entry); } catch (e) { console.error('Consensus write error:', e.message); }
+    try {
+      await eventsCol.insertOne(entry);
+      io.emit('seismic:consensus', entry);
+    } catch (e) { console.error('Consensus write error:', e.message); }
   }
   windowDevices.clear();
   windowTimer = null;
@@ -96,6 +111,9 @@ app.post('/api/seismic', async (req, res) => {
 
     await eventsCol.insertOne(entry);
     lastEventTimes[id] = new Date();
+
+    // Push real-time to dashboard
+    io.emit('seismic:event', entry);
 
     // Consensus window
     windowDevices.add(id);
@@ -214,7 +232,7 @@ async function main() {
   await eventsCol.createIndex({ timestamp: -1 });
   await eventsCol.createIndex({ status: 1 });
 
-  app.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`Seismometer API listening on http://0.0.0.0:${PORT}`);
   });
 }

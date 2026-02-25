@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { io } from 'socket.io-client';
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine,
@@ -8,7 +9,7 @@ import {
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  CONSTANTS                                                       ║
 // ╚══════════════════════════════════════════════════════════════════╝
-const REFRESH_MS = 30_000;
+const POLL_FALLBACK_MS = 60_000;
 
 const DEVICE_COLORS = {
   'Ryan Office': '#00ff88',
@@ -144,6 +145,7 @@ export default function App() {
   const [timezone, setTimezone] = useState('America/New_York');
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [wsConnected, setWsConnected] = useState(false);
 
   // ── Data Fetching ──────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -168,9 +170,47 @@ export default function App() {
 
   useEffect(() => {
     fetchAll();
-    const id = setInterval(fetchAll, REFRESH_MS);
+    // Fallback poll every 60s (real-time handles most updates)
+    const id = setInterval(fetchAll, POLL_FALLBACK_MS);
     return () => clearInterval(id);
   }, [fetchAll]);
+
+  // ── Socket.IO real-time updates ────────────────────────────────
+  useEffect(() => {
+    const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
+
+    socket.on('connect', () => {
+      console.log('[WS] connected:', socket.id);
+      setWsConnected(true);
+    });
+
+    socket.on('disconnect', () => {
+      console.log('[WS] disconnected');
+      setWsConnected(false);
+    });
+
+    // New seismic event → prepend to events array
+    socket.on('seismic:event', (entry) => {
+      setEvents(prev => [entry, ...prev]);
+      setLastRefresh(Date.now());
+    });
+
+    // Consensus confirmed → prepend to events array
+    socket.on('seismic:consensus', (entry) => {
+      setEvents(prev => [entry, ...prev]);
+      setLastRefresh(Date.now());
+    });
+
+    // Device heartbeat → update that device to Online
+    socket.on('device:heartbeat', ({ id, alias }) => {
+      setStatuses(prev => ({
+        ...prev,
+        [id]: { alias: alias || id, status: 'Online' },
+      }));
+    });
+
+    return () => socket.disconnect();
+  }, []);
 
   // ── Computed: Filter by period ─────────────────────────────────
   const periodMs = PERIODS.find(p => p.key === period)?.ms || 604_800_000;
@@ -321,8 +361,8 @@ export default function App() {
             ))}
           </select>
           {lastRefresh && (
-            <span className="refresh-badge" title="Auto-refreshes every 30s">
-              ⟳ {timeAgo(lastRefresh)}
+            <span className="refresh-badge" title={wsConnected ? 'Real-time via WebSocket' : 'Polling fallback'}>
+              {wsConnected ? '⚡ Live' : '⟳ Poll'} · {timeAgo(lastRefresh)}
             </span>
           )}
         </div>
