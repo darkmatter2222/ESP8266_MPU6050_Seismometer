@@ -33,3 +33,9 @@
 arduino_secrets.h
 .pio/
 .vscode/
+.env
+server/.env
+server/venv/
+server/events.txt
+__pycache__/
+*.pyc

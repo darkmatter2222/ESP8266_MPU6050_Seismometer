@@ -1,0 +1,16 @@
+services:
+  seismometer:
+    build: .
+    container_name: seismometer
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - LOG_FILE=/app/data/events.txt
+      - MAX_LOG_BYTES=20971520
+    volumes:
+      - seismo-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  seismo-data:
