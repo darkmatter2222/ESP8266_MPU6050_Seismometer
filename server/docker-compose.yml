@@ -6,11 +6,5 @@ services:
       - "3000:3000"
     environment:
       - PORT=3000
-      - LOG_FILE=/app/data/events.txt
-      - MAX_LOG_BYTES=20971520
-    volumes:
-      - seismo-data:/app/data
+      - MONGO_URI=mongodb://ryan:Welcome123!@192.168.86.48:27017/seismic?authSource=admin
     restart: unless-stopped
-
-volumes:
-  seismo-data:

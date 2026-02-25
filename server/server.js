@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 // server.js – Express API for Seismometer Dashboard
 // Drop-in replacement for Flask server.py — fully ESP8266-compatible
+// Uses MongoDB for persistent event storage
 
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { MongoClient } = require('mongodb');
 
 // ── Configuration ────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const LOG_FILE = process.env.LOG_FILE || path.join(__dirname, 'data', 'events.txt');
-const MAX_LOG_BYTES = parseInt(process.env.MAX_LOG_BYTES || String(20 * 1024 * 1024), 10);
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/seismic';
 
 // Device translation dictionary (MAC → human name)
 const translationDict = {
@@ -28,10 +29,9 @@ let httpLogs = [];                  // { timestamp, endpoint }
 let windowTimer = null;
 let windowDevices = new Set();
 
-// ── Ensure log file exists ───────────────────────────────────────
-const logDir = path.dirname(LOG_FILE);
-if (logDir && !fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-if (!fs.existsSync(LOG_FILE)) fs.writeFileSync(LOG_FILE, '', 'utf8');
+// ── MongoDB collections (set after connect) ─────────────────────
+let eventsCol = null;   // seismic events + consensus entries
+let httpLogsCol = null; // API traffic logs
 
 // ── Express setup ────────────────────────────────────────────────
 const app = express();
@@ -59,7 +59,7 @@ app.get('/', (req, res, next) => {
 });
 
 // ── Consensus window logic ──────────────────────────────────────
-function onWindowEnd() {
+async function onWindowEnd() {
   console.log('----- window end');
   if (DEVICE_IDS.every(id => windowDevices.has(id))) {
     console.log('\x1b[92mConfirmed!!!\x1b[0m');
@@ -69,14 +69,14 @@ function onWindowEnd() {
       devices: DEVICE_IDS,
       aliases: DEVICE_IDS.map(d => translationDict[d] || d),
     };
-    try { fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + '\n', 'utf8'); } catch {}
+    try { await eventsCol.insertOne(entry); } catch (e) { console.error('Consensus write error:', e.message); }
   }
   windowDevices.clear();
   windowTimer = null;
 }
 
 // ── POST /api/seismic ───────────────────────────────────────────
-app.post('/api/seismic', (req, res) => {
+app.post('/api/seismic', async (req, res) => {
   try {
     const data = req.body;
     if (!data || data.level === undefined || data.deltaG === undefined) {
@@ -92,17 +92,9 @@ app.post('/api/seismic', (req, res) => {
       id,
       alias: translationDict[id],
     };
-    const line = JSON.stringify(entry) + '\n';
-    console.log(line.trim());
+    console.log(JSON.stringify(entry));
 
-    // Size guard
-    try {
-      if (fs.statSync(LOG_FILE).size >= MAX_LOG_BYTES) {
-        return res.json({ status: 'skipped', reason: 'max size reached' });
-      }
-    } catch {}
-
-    fs.appendFileSync(LOG_FILE, line, 'utf8');
+    await eventsCol.insertOne(entry);
     lastEventTimes[id] = new Date();
 
     // Consensus window
@@ -149,30 +141,31 @@ app.get('/api/status', (req, res) => {
 });
 
 // ── GET /api/events ─────────────────────────────────────────────
-app.get('/api/events', (req, res) => {
-  const events = [];
+app.get('/api/events', async (req, res) => {
   try {
-    for (const line of fs.readFileSync(LOG_FILE, 'utf8').split('\n')) {
-      if (line.trim()) { try { events.push(JSON.parse(line)); } catch {} }
-    }
-  } catch {}
-  res.json(events);
+    const events = await eventsCol.find({}, { projection: { _id: 0 } })
+      .sort({ timestamp: -1 })
+      .limit(50000)
+      .toArray();
+    res.json(events);
+  } catch (err) {
+    console.error('Events read error:', err.message);
+    res.json([]);
+  }
 });
 
 // ── GET /api/consensus ──────────────────────────────────────────
-app.get('/api/consensus', (req, res) => {
-  const events = [];
+app.get('/api/consensus', async (req, res) => {
   try {
-    for (const line of fs.readFileSync(LOG_FILE, 'utf8').split('\n')) {
-      if (line.trim()) {
-        try {
-          const e = JSON.parse(line);
-          if (e.status === 'CONFIRMED') events.push(e);
-        } catch {}
-      }
-    }
-  } catch {}
-  res.json(events);
+    const events = await eventsCol.find(
+      { status: 'CONFIRMED' },
+      { projection: { _id: 0 } }
+    ).sort({ timestamp: -1 }).toArray();
+    res.json(events);
+  } catch (err) {
+    console.error('Consensus read error:', err.message);
+    res.json([]);
+  }
 });
 
 // ── GET /api/http_logs ──────────────────────────────────────────
@@ -208,7 +201,25 @@ app.get('*', (req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-// ── Start ───────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Seismometer API listening on http://0.0.0.0:${PORT}`);
+// ── Connect to MongoDB then start ───────────────────────────────
+async function main() {
+  const client = new MongoClient(MONGO_URI);
+  await client.connect();
+  console.log('Connected to MongoDB');
+
+  const db = client.db();          // uses database name from URI
+  eventsCol = db.collection('events');
+
+  // Create indexes for common queries
+  await eventsCol.createIndex({ timestamp: -1 });
+  await eventsCol.createIndex({ status: 1 });
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Seismometer API listening on http://0.0.0.0:${PORT}`);
+  });
+}
+
+main().catch(err => {
+  console.error('Failed to start:', err);
+  process.exit(1);
 });
