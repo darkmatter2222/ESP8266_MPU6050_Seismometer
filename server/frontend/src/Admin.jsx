@@ -58,6 +58,7 @@ export default function Admin() {
 
     socket.on('device:reinit_sent', ({ id, alias, time }) => {
       addToast(`205 sent to ${alias} — awaiting reboot`, 'warning');
+      setReinitPending(prev => { const n = { ...prev }; delete n[id]; return n; });
       fetchAll();
     });
 
@@ -331,7 +332,12 @@ export default function Admin() {
         {Object.entries(devices).map(([id, dev]) => {
           const status = deviceStatuses[id] || {};
           const isOnline = status.status === 'Online';
-          const isPending = reinitPending[id] || activeReinits.some(r => r.deviceId === id);
+          const activeFlag = activeReinits.find(r => r.deviceId === id);
+          const reinitPhase = reinitPending[id] ? 'requesting'
+            : activeFlag?.status === 'pending' ? 'pending'
+            : activeFlag?.status === 'sent' ? 'sent'
+            : null;
+          const isBlocked = !!reinitPhase;
           const hasOverride = dev.heartbeat_interval != null || (dev.sensitivity && Object.values(dev.sensitivity).some(v => v != null));
 
           return (
@@ -343,11 +349,14 @@ export default function Admin() {
                   {hasOverride && <span className="override-badge">OVERRIDE</span>}
                 </div>
                 <button
-                  className={`reinit-btn ${isPending ? 'pending' : ''}`}
+                  className={`reinit-btn ${isBlocked ? 'pending' : ''}`}
                   onClick={() => requestReinit(id)}
-                  disabled={isPending}
+                  disabled={isBlocked}
                 >
-                  {isPending ? '⏳ Pending...' : '⟳ Reinit'}
+                  {reinitPhase === 'requesting' ? '⏳ Sending...'
+                    : reinitPhase === 'pending' ? '⏳ Waiting for heartbeat...'
+                    : reinitPhase === 'sent' ? '🔄 Rebooting...'
+                    : '⟳ Reinit'}
                 </button>
               </div>
               <div className="panel-body">
