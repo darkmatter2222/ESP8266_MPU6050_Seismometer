@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
-  CartesianGrid, Tooltip, Legend, ReferenceLine,
-  ComposedChart, Bar, Line, AreaChart, Area,
+  CartesianGrid, Tooltip, Legend, ReferenceLine, ReferenceArea,
+  ComposedChart, Bar, Line, AreaChart, Area, Brush,
 } from 'recharts';
 
 // ╔══════════════════════════════════════════════════════════════════╗
@@ -148,6 +148,16 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
+  // ── Interactivity state ─────────────────────────────────────
+  const [deviceFilters, setDeviceFilters] = useState({}); // alias -> bool
+  const [levelFilters, setLevelFilters] = useState({ minor: true, moderate: true, severe: true });
+  const [showConsensus, setShowConsensus] = useState(true);
+  const [xZoomDomain, setXZoomDomain] = useState(null); // [min, max]
+  const [refAreaStart, setRefAreaStart] = useState(null);
+  const [refAreaEnd, setRefAreaEnd] = useState(null);
+  const [modalEvent, setModalEvent] = useState(null);
+  const [rangeModal, setRangeModal] = useState(null); // {start,end,events}
+  const [recentsLimit, setRecentsLimit] = useState(25);
 
   // ── Data Fetching ──────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -237,7 +247,9 @@ export default function App() {
   const deviceGroups = useMemo(() => {
     const groups = {};
     for (const e of seismicEvents) {
+      if (!levelFilters[e.level]) continue;
       const key = e.alias || e.id || 'Unknown';
+      if (Object.keys(deviceFilters).length && deviceFilters[key] === false) continue;
       if (!groups[key]) groups[key] = [];
       groups[key].push({
         _time: e._time,
@@ -247,7 +259,7 @@ export default function App() {
       });
     }
     return groups;
-  }, [seismicEvents]);
+  }, [seismicEvents, deviceFilters, levelFilters]);
 
   // ── Computed: Key metrics ──────────────────────────────────────
   const metrics = useMemo(() => {
@@ -307,8 +319,11 @@ export default function App() {
 
   // ── Computed: Recent events ───────────────────────────────────
   const recentEvents = useMemo(() => {
-    return [...seismicEvents].sort((a, b) => b._time - a._time).slice(0, 25);
-  }, [seismicEvents]);
+    return [...seismicEvents]
+      .filter(e => levelFilters[e.level] && (!Object.keys(deviceFilters).length || deviceFilters[e.alias || e.id] !== false))
+      .sort((a, b) => b._time - a._time)
+      .slice(0, recentsLimit);
+  }, [seismicEvents, levelFilters, deviceFilters, recentsLimit]);
 
   // ── Computed: Consensus details ───────────────────────────────
   const consensusDetails = useMemo(() => {
@@ -317,6 +332,54 @@ export default function App() {
 
   // ── Thresholds ────────────────────────────────────────────────
   const thresholds = { minor: 0.035, moderate: 0.10, severe: 0.50 };
+
+  // Initialize device filters from statuses/events once
+  useEffect(() => {
+    const aliases = new Set(Object.keys(statuses).map(k => statuses[k]?.alias).filter(Boolean));
+    const fromEvents = new Set(seismicEvents.map(e => e.alias || e.id));
+    const all = new Set([...aliases, ...fromEvents]);
+    setDeviceFilters(prev => {
+      const next = { ...prev };
+      for (const a of all) if (!(a in next)) next[a] = true;
+      return next;
+    });
+  }, [statuses, seismicEvents.length]);
+
+  // Zoom & range selection handlers
+  const onZoomMouseDown = (e) => { if (e && e.activeLabel) setRefAreaStart(e.activeLabel); };
+  const onZoomMouseMove = (e) => { if (refAreaStart && e && e.activeLabel) setRefAreaEnd(e.activeLabel); };
+  const onZoomMouseUp = () => {
+    if (refAreaStart && refAreaEnd && Math.abs(refAreaStart - refAreaEnd) > 1000) {
+      const start = Math.min(refAreaStart, refAreaEnd);
+      const end = Math.max(refAreaStart, refAreaEnd);
+      setXZoomDomain([start, end]);
+      const inRange = seismicEvents.filter(e => e._time >= start && e._time <= end)
+        .filter(e => levelFilters[e.level] && (deviceFilters[e.alias || e.id] ?? true));
+      setRangeModal({ start, end, events: inRange });
+    }
+    setRefAreaStart(null);
+    setRefAreaEnd(null);
+  };
+  const resetZoom = () => setXZoomDomain(null);
+  const onPointClick = (data) => { if (data && data.payload) setModalEvent(data.payload); };
+
+  const exportCsv = (rows, filename = 'events.csv') => {
+    const header = ['time','alias','level','deltaG'];
+    const lines = [header.join(',')].concat(rows.map(r => [
+      new Date(r._time).toISOString(),
+      (r.alias || r.id || ''),
+      r.level,
+      (r.deltaG != null ? r.deltaG : '').toString()
+    ].join(',')));
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // ── Render ────────────────────────────────────────────────────
   if (loading) {
@@ -371,6 +434,43 @@ export default function App() {
         </div>
       </header>
 
+      {/* ─── Controls Row ───────────────────────────────────── */}
+      <div className="controls-row">
+        <div className="filter-group">
+          <span className="control-label">Devices:</span>
+          {Object.keys(deviceFilters).map(alias => (
+            <label key={alias} className="chk">
+              <input
+                type="checkbox"
+                checked={deviceFilters[alias]}
+                onChange={e => setDeviceFilters(prev => ({ ...prev, [alias]: e.target.checked }))}
+              />
+              <span style={{ color: deviceColor(alias) }}>{alias}</span>
+            </label>
+          ))}
+        </div>
+        <div className="filter-group">
+          <span className="control-label">Levels:</span>
+          {(['minor','moderate','severe']).map(lvl => (
+            <label key={lvl} className="chk">
+              <input
+                type="checkbox"
+                checked={levelFilters[lvl]}
+                onChange={e => setLevelFilters(prev => ({ ...prev, [lvl]: e.target.checked }))}
+              />
+              <span className={`level-badge ${lvl}`}>{lvl}</span>
+            </label>
+          ))}
+        </div>
+        <label className="chk">
+          <input type="checkbox" checked={showConsensus} onChange={e => setShowConsensus(e.target.checked)} />
+          <span>Show consensus markers</span>
+        </label>
+        {xZoomDomain && (
+          <button className="btn" onClick={resetZoom}>Reset Zoom</button>
+        )}
+      </div>
+
       {/* ─── Status Row ──────────────────────────────────────── */}
       <div className="status-row">
         <div className="node-chips">
@@ -411,12 +511,17 @@ export default function App() {
           <div className="empty-state">No seismic events in this period</div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <ScatterChart margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+            <ScatterChart
+              margin={{ top: 8, right: 16, bottom: 4, left: 0 }}
+              onMouseDown={onZoomMouseDown}
+              onMouseMove={onZoomMouseMove}
+              onMouseUp={onZoomMouseUp}
+            >
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
               <XAxis
                 dataKey="_time"
                 type="number"
-                domain={['dataMin', 'dataMax']}
+                domain={xZoomDomain || ['dataMin', 'dataMax']}
                 tickFormatter={t => fmtTick(t, timezone, period)}
                 tick={{ fill: '#666', fontSize: 11 }}
                 tickCount={10}
@@ -438,7 +543,7 @@ export default function App() {
               <ReferenceLine y={thresholds.moderate} stroke="#ffaa0025" strokeDasharray="6 4" />
               <ReferenceLine y={thresholds.severe} stroke="#ff336625" strokeDasharray="6 4" />
               {/* Consensus event lines */}
-              {consensusEvents.map((c, i) => (
+              {showConsensus && consensusEvents.map((c, i) => (
                 <ReferenceLine key={`c${i}`} x={c._time} stroke="#ff00ff" strokeDasharray="4 3" strokeWidth={1} opacity={0.5} />
               ))}
               {/* One Scatter per device */}
@@ -450,8 +555,12 @@ export default function App() {
                   fill={deviceColor(alias)}
                   fillOpacity={0.8}
                   r={3}
+                  onClick={onPointClick}
                 />
               ))}
+              {refAreaStart && refAreaEnd && (
+                <ReferenceArea x1={refAreaStart} x2={refAreaEnd} strokeOpacity={0.2} />
+              )}
             </ScatterChart>
           </ResponsiveContainer>
         )}
@@ -466,7 +575,7 @@ export default function App() {
             <div className="empty-state">No activity data</div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={activityData} margin={{ top: 8, right: 40, bottom: 4, left: 0 }}>
+              <ComposedChart data={activityData} margin={{ top: 8, right: 40, bottom: 24, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                 <XAxis
                   dataKey="time"
@@ -494,6 +603,7 @@ export default function App() {
                 <Bar yAxisId="count" dataKey="moderate" name="Moderate" stackId="s" fill="#ffaa00" radius={[0,0,0,0]} />
                 <Bar yAxisId="count" dataKey="minor"    name="Minor"    stackId="s" fill="#00ff88" radius={[0,0,0,0]} />
                 <Line yAxisId="dg" dataKey="maxDg" name="Max ΔG" stroke="#ffffff60" dot={false} strokeWidth={1.5} />
+                <Brush dataKey="time" height={18} stroke="#00ff88" travellerWidth={8} />
               </ComposedChart>
             </ResponsiveContainer>
           )}
@@ -523,6 +633,13 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
+              <div className="table-actions">
+                <button className="btn" onClick={() => setRecentsLimit(l => l + 50)}>Show more</button>
+                {recentsLimit > 25 && (
+                  <button className="btn" onClick={() => setRecentsLimit(25)}>Show less</button>
+                )}
+                <button className="btn" onClick={() => exportCsv(recentEvents, 'recent_events.csv')}>Export CSV</button>
+              </div>
             </div>
           )}
         </Panel>
@@ -567,7 +684,7 @@ export default function App() {
             <div className="empty-state">No traffic data</div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trafficData} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+              <AreaChart data={trafficData} margin={{ top: 8, right: 16, bottom: 24, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                 <XAxis
                   dataKey="time"
@@ -584,12 +701,78 @@ export default function App() {
                 <Area type="monotone" dataKey="status"  name="/api/status"  stackId="1" stroke="#00aaff" fill="#00aaff20" />
                 <Area type="monotone" dataKey="events"  name="/api/events"  stackId="1" stroke="#ff6644" fill="#ff664420" />
                 <Area type="monotone" dataKey="other"   name="other"        stackId="1" stroke="#888"    fill="#88888820" />
+                <Brush dataKey="time" height={18} stroke="#00ff88" travellerWidth={8} />
               </AreaChart>
             </ResponsiveContainer>
           )}
         </Panel>
 
       </div>
+
+      {/* ─── Event Modal ───────────────────────────────────── */}
+      {modalEvent && (
+        <div className="modal-backdrop" onClick={() => setModalEvent(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>Event Details</div>
+              <button className="modal-close" onClick={() => setModalEvent(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="kv"><span>Time</span><span className="mono">{fmtTs(modalEvent._time, timezone)}</span></div>
+              <div className="kv"><span>Device</span><span style={{ color: deviceColor(modalEvent.alias) }}>{modalEvent.alias}</span></div>
+              <div className="kv"><span>Level</span><span className={`level-badge ${modalEvent.level}`}>{modalEvent.level}</span></div>
+              <div className="kv"><span>ΔG</span><span className="mono">{modalEvent.deltaG?.toFixed(5)}</span></div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => exportCsv([modalEvent], 'event.csv')}>Export</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Range Modal ───────────────────────────────────── */}
+      {rangeModal && (
+        <div className="modal-backdrop" onClick={() => setRangeModal(null)}>
+          <div className="modal large" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>Selected Range</div>
+              <button className="modal-close" onClick={() => setRangeModal(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="kv"><span>From</span><span className="mono">{fmtTs(rangeModal.start, timezone)}</span></div>
+              <div className="kv"><span>To</span><span className="mono">{fmtTs(rangeModal.end, timezone)}</span></div>
+              <div className="kv"><span>Events</span><span className="mono">{rangeModal.events.length}</span></div>
+              <div className="range-table table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Device</th>
+                      <th>Level</th>
+                      <th>ΔG</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rangeModal.events.slice(0, 500).map((e,i) => (
+                      <tr key={i}>
+                        <td className="mono">{fmtTs(e._time, timezone)}</td>
+                        <td style={{ color: deviceColor(e.alias) }}>{e.alias}</td>
+                        <td><span className={`level-badge ${e.level}`}>{e.level}</span></td>
+                        <td className="mono">{e.deltaG?.toFixed(5)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => exportCsv(rangeModal.events, 'range_events.csv')}>Export CSV</button>
+              <button className="btn" onClick={() => setRangeModal(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
