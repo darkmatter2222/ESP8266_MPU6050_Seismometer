@@ -90,6 +90,20 @@ app.get('/', async (req, res, next) => {
       }
     } catch (e) { console.error('Reinit check error:', e.message); }
 
+    // Auto-complete any stale 'sent' reinit flags (fallback if /api/init wasn't called)
+    try {
+      const cutoff = new Date(Date.now() - 60 * 1000).toISOString(); // 60s timeout
+      const nowIso = new Date().toISOString();
+      const result = await reinitCol.updateMany(
+        { deviceId: id, status: 'sent', sent_at: { $lte: cutoff } },
+        { $set: { status: 'completed', completed_at: nowIso } }
+      );
+      if (result && result.modifiedCount > 0) {
+        io.emit('device:reinit_completed', { id, alias: translationDict[id], time: nowIso });
+        console.log(`[REINIT] Auto-completed for ${translationDict[id]} (${id})`);
+      }
+    } catch (e) { console.error('Reinit auto-complete error:', e.message); }
+
     return res.json({ status: 'ok', time: new Date().toISOString() });
   }
   next();

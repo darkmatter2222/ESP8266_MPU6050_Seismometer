@@ -17,6 +17,8 @@ export default function Admin() {
   const [reinitPending, setReinitPending] = useState({});  // deviceId → true
   const [toasts, setToasts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [formDirty, setFormDirty] = useState(false);
+  const [reinitDone, setReinitDone] = useState({}); // deviceId -> timestamp
 
   // ── Toast helper ───────────────────────────────────────────────
   const addToast = useCallback((message, type = 'info') => {
@@ -35,7 +37,8 @@ export default function Admin() {
       ]);
       if (cfgRes.ok) {
         const cfg = await cfgRes.json();
-        setConfig(cfg);
+        // Avoid overwriting in-progress edits
+        if (!formDirty) setConfig(cfg);
       }
       if (statusRes.ok) setDeviceStatuses(await statusRes.json());
       if (reinitRes.ok) setReinitStatus(await reinitRes.json());
@@ -44,7 +47,7 @@ export default function Admin() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [formDirty]);
 
   useEffect(() => {
     fetchAll();
@@ -65,6 +68,14 @@ export default function Admin() {
     socket.on('device:init', ({ id, alias, time }) => {
       addToast(`${alias} reinitialized successfully`, 'success');
       setReinitPending(prev => { const n = { ...prev }; delete n[id]; return n; });
+      setReinitDone(prev => ({ ...prev, [id]: Date.now() }));
+      fetchAll();
+    });
+
+    socket.on('device:reinit_completed', ({ id, alias }) => {
+      addToast(`${alias} reinit completed`, 'success');
+      setReinitPending(prev => { const n = { ...prev }; delete n[id]; return n; });
+      setReinitDone(prev => ({ ...prev, [id]: Date.now() }));
       fetchAll();
     });
 
@@ -76,16 +87,18 @@ export default function Admin() {
     });
 
     socket.on('config:updated', () => {
-      fetchAll();
+      if (!formDirty) fetchAll();
+      else addToast('Server config changed. Your unsaved edits are preserved.', 'info');
     });
 
     return () => socket.disconnect();
-  }, [addToast, fetchAll]);
+  }, [addToast, fetchAll, formDirty]);
 
   // ── Handlers ───────────────────────────────────────────────────
   const updateGlobal = (field, value) => {
     setConfig(prev => ({ ...prev, [field]: value }));
     setSaved(false);
+    setFormDirty(true);
   };
 
   const updateSensitivity = (level, value) => {
@@ -94,6 +107,7 @@ export default function Admin() {
       sensitivity: { ...prev.sensitivity, [level]: value },
     }));
     setSaved(false);
+    setFormDirty(true);
   };
 
   const updateDevice = (deviceId, field, value) => {
@@ -105,6 +119,7 @@ export default function Admin() {
       },
     }));
     setSaved(false);
+    setFormDirty(true);
   };
 
   const updateDeviceSensitivity = (deviceId, level, value) => {
@@ -123,6 +138,7 @@ export default function Admin() {
       };
     });
     setSaved(false);
+    setFormDirty(true);
   };
 
   const saveConfig = async () => {
@@ -135,6 +151,7 @@ export default function Admin() {
       });
       if (res.ok) {
         setSaved(true);
+        setFormDirty(false);
         addToast('Configuration saved', 'success');
       } else {
         addToast('Failed to save configuration', 'error');
@@ -337,7 +354,10 @@ export default function Admin() {
             : activeFlag?.status === 'pending' ? 'pending'
             : activeFlag?.status === 'sent' ? 'sent'
             : null;
-          const isBlocked = !!reinitPhase;
+          const lastInitMs = status.last_init ? new Date(status.last_init).getTime() : 0;
+          const doneRecently = (reinitDone[id] && (Date.now() - reinitDone[id] < 90 * 1000)) ||
+                               (lastInitMs && (Date.now() - lastInitMs < 90 * 1000));
+          const isBlocked = !!reinitPhase; // only block during active phases
           const hasOverride = dev.heartbeat_interval != null || (dev.sensitivity && Object.values(dev.sensitivity).some(v => v != null));
 
           return (
@@ -349,11 +369,12 @@ export default function Admin() {
                   {hasOverride && <span className="override-badge">OVERRIDE</span>}
                 </div>
                 <button
-                  className={`reinit-btn ${isBlocked ? 'pending' : ''}`}
+                  className={`reinit-btn ${doneRecently ? 'done' : isBlocked ? 'pending' : ''}`}
                   onClick={() => requestReinit(id)}
                   disabled={isBlocked}
                 >
-                  {reinitPhase === 'requesting' ? '⏳ Sending...'
+                  {doneRecently ? '✓ Reinitialized'
+                    : reinitPhase === 'requesting' ? '⏳ Sending...'
                     : reinitPhase === 'pending' ? '⏳ Waiting for heartbeat...'
                     : reinitPhase === 'sent' ? '🔄 Rebooting...'
                     : '⟳ Reinit'}

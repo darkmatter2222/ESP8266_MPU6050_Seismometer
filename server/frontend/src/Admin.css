@@ -286,6 +286,12 @@
   background: var(--bg-input);
 }
 
+.reinit-btn.done {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(0, 255, 136, 0.10);
+}
+
 .reinit-all-btn {
   padding: 3px 10px;
   font-size: 10px;
