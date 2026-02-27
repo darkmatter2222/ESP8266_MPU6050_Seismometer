@@ -160,6 +160,7 @@ export default function App() {
   const [colorMode, setColorMode] = useState('level'); // 'level' | 'device' | 'gradient'
   const panRef = useRef({ anchor: null, domain: null });
   const chartRef = useRef(null);
+  const plotBoundsRef = useRef({ left: 0, width: 1, top: 0, height: 0 });
   const [drag, setDrag] = useState({ active: false, startPx: null, curPx: null, mode: null });
 
   // ── Data Fetching ──────────────────────────────────────────────
@@ -326,18 +327,34 @@ export default function App() {
 
   // Pixel-domain helpers
   const currentDomain = useMemo(() => xZoomDomain || [xDataMin, xDataMax], [xZoomDomain, xDataMin, xDataMax]);
+
+  // Reads the actual recharts plot area (cartesian grid) rect relative to the overlay.
+  // Must be called before any px→time conversion to keep plotBoundsRef accurate.
+  const updatePlotBounds = () => {
+    const overlay = chartRef.current;
+    if (!overlay) return;
+    const gridEl = overlay.parentElement?.querySelector('.recharts-cartesian-grid');
+    if (!gridEl) return;
+    const oRect = overlay.getBoundingClientRect();
+    const gRect = gridEl.getBoundingClientRect();
+    plotBoundsRef.current = {
+      left:   gRect.left   - oRect.left,
+      width:  gRect.width  || 1,
+      top:    gRect.top    - oRect.top,
+      height: gRect.height || 0,
+    };
+  };
+
   const pxToTime = useCallback((px) => {
-    const el = chartRef.current;
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    const w = rect.width || 1;
-    const t = currentDomain[0] + (px / w) * (currentDomain[1] - currentDomain[0]);
-    return t;
+    const { left, width } = plotBoundsRef.current;
+    const fraction = Math.max(0, Math.min(1, (px - left) / width));
+    return currentDomain[0] + fraction * (currentDomain[1] - currentDomain[0]);
   }, [currentDomain]);
 
   // Overlay mouse handlers
   const onOverlayDown = (ev) => {
     if (ev.button !== 0) return; // left click only
+    updatePlotBounds();
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ev.clientX - rect.left;
@@ -356,10 +373,10 @@ export default function App() {
     if (drag.mode === 'pan' && panRef.current.anchor != null) {
       const dxPx = x - panRef.current.anchor;
       const span = panRef.current.domain[1] - panRef.current.domain[0];
-      const rectW = rect.width || 1;
+      const plotW = plotBoundsRef.current.width || 1;
       let next = [
-        panRef.current.domain[0] - (dxPx / rectW) * span,
-        panRef.current.domain[1] - (dxPx / rectW) * span,
+        panRef.current.domain[0] - (dxPx / plotW) * span,
+        panRef.current.domain[1] - (dxPx / plotW) * span,
       ];
       const width = next[1] - next[0];
       if (next[0] < xDataMin) next = [xDataMin, xDataMin + width];
@@ -392,12 +409,15 @@ export default function App() {
   const onPointClick = (data) => { if (data && data.payload) setModalEvent(data.payload); };
 
   const onWheel = (ev) => {
+    updatePlotBounds();
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ev.clientX - rect.left;
     const dom = currentDomain;
     const span = dom[1] - dom[0];
-    const center = dom[0] + (x / (rect.width || 1)) * span;
+    const { left: plotLeft, width: plotW } = plotBoundsRef.current;
+    const fraction = Math.max(0, Math.min(1, (x - plotLeft) / plotW));
+    const center = dom[0] + fraction * span;
     const factor = ev.deltaY < 0 ? 0.8 : 1.25;
     const half = (span * factor) / 2;
     let next = [center - half, center + half];
@@ -590,7 +610,9 @@ export default function App() {
               <XAxis
                 dataKey="_time"
                 type="number"
-                domain={xZoomDomain || ['dataMin', 'dataMax']}
+                scale="time"
+                domain={currentDomain}
+                allowDataOverflow={true}
                 tickFormatter={t => fmtTick(t, timezone, period)}
                 tick={{ fill: '#666', fontSize: 11 }}
                 tickCount={10}
@@ -599,6 +621,7 @@ export default function App() {
                 dataKey="deltaG"
                 tick={{ fill: '#666', fontSize: 11 }}
                 tickFormatter={v => v.toFixed(2)}
+                allowDataOverflow={true}
                 label={{ value: 'ΔG (g)', angle: -90, position: 'insideLeft', fill: '#555', fontSize: 11 }}
               />
               <Tooltip content={props => <DeltaTooltip {...props} tz={timezone} />} />
@@ -646,7 +669,12 @@ export default function App() {
             {drag.active && (drag.mode === 'zoom' || drag.mode === 'select') && (
               <div
                 className="selection-rect"
-                style={{ left: Math.min(drag.startPx, drag.curPx), width: Math.abs(drag.curPx - drag.startPx) }}
+                style={{
+                  left:   Math.min(drag.startPx, drag.curPx),
+                  width:  Math.abs(drag.curPx - drag.startPx),
+                  top:    plotBoundsRef.current.top,
+                  height: plotBoundsRef.current.height,
+                }}
               />
             )}
           </div>

@@ -475,9 +475,10 @@ body {
 }
 .selection-rect {
   position: absolute;
-  top: 0; bottom: 0;
+  /* top and height are set from plotBoundsRef inline styles */
   background: rgba(0, 255, 136, 0.10);
   border: 1px solid var(--accent);
+  border-radius: 2px;
   pointer-events: none;
 }
 
