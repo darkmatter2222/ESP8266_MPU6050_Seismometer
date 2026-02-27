@@ -584,10 +584,6 @@ export default function App() {
           <ResponsiveContainer width="100%" height="100%">
             <ScatterChart
               margin={{ top: 8, right: 16, bottom: 4, left: 0 }}
-              onMouseDown={onZoomMouseDown}
-              onMouseMove={onZoomMouseMove}
-              onMouseUp={onZoomMouseUp}
-              onWheel={onWheel}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
               <XAxis
