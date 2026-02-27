@@ -225,6 +225,14 @@ body {
   animation: pulse 2s ease-in-out infinite;
 }
 .node-chip.online .chip-dot { animation: none; }
+.chip-fw-badge {
+  font-size: 9px;
+  font-family: monospace;
+  color: var(--accent);
+  opacity: 0.7;
+  margin-left: 4px;
+  letter-spacing: 0.03em;
+}
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

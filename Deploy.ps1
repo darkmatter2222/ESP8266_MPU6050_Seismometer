@@ -44,6 +44,10 @@ if ($sshKeyPath -match '^~') {
 # Remote deployment directory
 $remoteDir = "/home/$sshUser/seismometer"
 
+# ─── Firmware version ─────────────────────────────────────────────
+# Bump this string whenever you build and deploy new firmware
+$FIRMWARE_VERSION = "1.1.0"
+
 # Source directory
 $source = Join-Path $PSScriptRoot 'server'
 
@@ -119,9 +123,39 @@ foreach ($file in $frontendFiles) {
     }
 }
 
+# Deploy firmware binary (PlatformIO builds to .pio/build/nodemcuv2/firmware.bin)
+$firmwareBin = Join-Path $PSScriptRoot '.pio\build\nodemcuv2\firmware.bin'
+Write-Host "`n============================================="
+Write-Host " Firmware Deploy"
+Write-Host "============================================="
+if (Test-Path $firmwareBin) {
+    Write-Host "  Found firmware.bin - uploading v$FIRMWARE_VERSION..."
+    ssh -i $sshKeyPath "$sshUser@$sshHost" "mkdir -p $remoteDir/firmware"
+
+    # Upload the binary
+    scp -i $sshKeyPath -o StrictHostKeyChecking=no "$firmwareBin" "${sshUser}@${sshHost}:${remoteDir}/firmware/firmware.bin"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to upload firmware.bin"
+        exit 1
+    }
+
+    # Write firmware.json metadata alongside the binary
+    $builtAt = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+    $fwJson = '{"version": "' + $FIRMWARE_VERSION + '", "built_at": "' + $builtAt + '"}'
+    ssh -i $sshKeyPath "$sshUser@$sshHost" "echo '$fwJson' > $remoteDir/firmware/firmware.json"
+    Write-Host "  Firmware v$FIRMWARE_VERSION deployed to server."
+    Write-Host "  Devices will self-update on next heartbeat/reboot."
+} else {
+    Write-Host "  WARNING: No firmware.bin found at:"
+    Write-Host "    $firmwareBin"
+    Write-Host "  Build firmware in PlatformIO IDE (Ctrl+Alt+B) then re-run Deploy.ps1."
+    Write-Host "  Continuing deploy without firmware update..."
+    ssh -i $sshKeyPath "$sshUser@$sshHost" "mkdir -p $remoteDir/firmware"
+}
+
 # Build and deploy with Docker Compose
 Write-Host "`nBuilding and starting Docker containers..."
-ssh -i $sshKeyPath "$sshUser@$sshHost" "cd $remoteDir && docker compose down --remove-orphans 2>/dev/null; docker compose build --no-cache && docker compose up -d"
+ssh -i $sshKeyPath "$sshUser@$sshHost" "cd $remoteDir; docker compose down --remove-orphans 2>/dev/null; docker compose build --no-cache; docker compose up -d"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Docker deployment failed!"

@@ -223,11 +223,24 @@ export default function App() {
       setLastRefresh(Date.now());
     });
 
-    // Device heartbeat → update that device to Online
+    // Device heartbeat → update that device to Online (preserve firmware_version)
     socket.on('device:heartbeat', ({ id, alias }) => {
       setStatuses(prev => ({
         ...prev,
-        [id]: { alias: alias || id, status: 'Online' },
+        [id]: { ...(prev[id] || {}), alias: alias || id, status: 'Online' },
+      }));
+    });
+
+    // Device init → update firmware version when device reports on (re)boot
+    socket.on('device:init', ({ id, alias, firmware_version }) => {
+      setStatuses(prev => ({
+        ...prev,
+        [id]: {
+          ...(prev[id] || {}),
+          alias: alias || id,
+          status: 'Online',
+          ...(firmware_version ? { firmware_version } : {}),
+        },
       }));
     });
 
@@ -647,6 +660,9 @@ export default function App() {
             <div key={id} className={`node-chip ${info.status === 'Online' ? 'online' : 'offline'}`}>
               <span className="chip-dot" />
               {info.alias || id}
+              {info.firmware_version && (
+                <span className="chip-fw-badge">v{info.firmware_version}</span>
+              )}
             </div>
           ))}
         </div>

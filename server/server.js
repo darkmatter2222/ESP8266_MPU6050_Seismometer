@@ -40,6 +40,19 @@ const DEFAULT_CONFIG = {
   status_threshold_seconds: 120,
 };
 
+// ── Firmware OTA ────────────────────────────────────────────────
+const FIRMWARE_DIR = path.join(__dirname, 'firmware');
+const deviceFirmwareVersions = {};   // deviceId → version string reported at last init
+
+// Read firmware.json metadata from disk (written by Deploy.ps1)
+function getFirmwareInfo() {
+  try {
+    const jsonPath = path.join(FIRMWARE_DIR, 'firmware.json');
+    if (fs.existsSync(jsonPath)) return JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  } catch (e) { /* no firmware deployed yet */ }
+  return null;
+}
+
 // ── MongoDB collections (set after connect) ─────────────────────
 let eventsCol = null;   // seismic events + consensus entries
 let configCol = null;   // global + per-device configuration
@@ -194,6 +207,13 @@ app.get('/api/init', async (req, res) => {
     }
   } catch (e) { console.error('Config load error:', e.message); }
 
+  // Track firmware version reported by this device
+  const reportedVersion = req.query.version || null;
+  if (reportedVersion) {
+    deviceFirmwareVersions[id] = reportedVersion;
+    console.log(`[FIRMWARE] ${translationDict[id]} (${id}) running v${reportedVersion}`);
+  }
+
   // Mark any "sent" reinit flags as completed
   try {
     await reinitCol.updateMany(
@@ -202,13 +222,28 @@ app.get('/api/init', async (req, res) => {
     );
   } catch {}
 
-  io.emit('device:init', { id, alias: translationDict[id], time: now, config: cfg });
+  // Build firmware OTA fields if firmware.json is present on disk
+  const fwInfo = getFirmwareInfo();
+  const protocol = req.headers['x-forwarded-proto'] || 'http';
+  const host = req.headers['host'] || `${getLocalIp()}:${PORT}`;
+  const firmwareUrl = `${protocol}://${host}/api/firmware/latest.bin`;
+
+  io.emit('device:init', {
+    id, alias: translationDict[id], time: now, config: cfg,
+    firmware_version: reportedVersion,
+    server_firmware_version: fwInfo?.version || null,
+  });
   console.log(`[INIT] ${translationDict[id]} (${id}) initialized`);
 
-  res.json({
+  const response = {
     heartbeat_interval: cfg.heartbeat_interval,
     sensitivity: cfg.sensitivity,
-  });
+  };
+  if (fwInfo) {
+    response.firmware_version = fwInfo.version;
+    response.firmware_url = firmwareUrl;
+  }
+  res.json(response);
 });
 
 // ── GET /api/status ─────────────────────────────────────────────
@@ -228,6 +263,7 @@ app.get('/api/status', async (req, res) => {
       alias: translationDict[id] || '',
       status: last && (now - last) <= threshold ? 'Online' : 'Offline',
       last_init: lastInitTimes[id] || null,
+      firmware_version: deviceFirmwareVersions[id] || null,
     };
   }
   res.json(result);
@@ -409,6 +445,27 @@ function getLocalIp() {
   }
   return '127.0.0.1';
 }
+
+// ── GET /api/firmware/version ──────────────────────────────────
+app.get('/api/firmware/version', (req, res) => {
+  const info = getFirmwareInfo();
+  if (!info) return res.status(404).json({ error: 'No firmware deployed yet' });
+  res.json({ ...info, devices: deviceFirmwareVersions });
+});
+
+// ── GET /api/firmware/latest.bin ───────────────────────────────
+app.get('/api/firmware/latest.bin', (req, res) => {
+  const binPath = path.join(FIRMWARE_DIR, 'firmware.bin');
+  if (!fs.existsSync(binPath)) {
+    return res.status(404).json({ error: 'firmware.bin not found on server' });
+  }
+  const fwInfo = getFirmwareInfo();
+  const version = fwInfo?.version || 'unknown';
+  console.log(`[FIRMWARE] Serving firmware.bin v${version} to ${req.ip}`);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'attachment; filename="firmware.bin"');
+  res.sendFile(binPath);
+});
 
 // ── Serve React build ───────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));

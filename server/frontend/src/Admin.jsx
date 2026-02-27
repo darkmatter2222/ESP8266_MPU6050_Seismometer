@@ -65,10 +65,17 @@ export default function Admin() {
       fetchAll();
     });
 
-    socket.on('device:init', ({ id, alias, time }) => {
+    socket.on('device:init', ({ id, alias, time, firmware_version }) => {
       addToast(`${alias} reinitialized successfully`, 'success');
       setReinitPending(prev => { const n = { ...prev }; delete n[id]; return n; });
       setReinitDone(prev => ({ ...prev, [id]: Date.now() }));
+      // Immediately reflect new firmware version if reported
+      if (firmware_version) {
+        setDeviceStatuses(prev => ({
+          ...prev,
+          [id]: { ...(prev[id] || {}), firmware_version },
+        }));
+      }
       fetchAll();
     });
 
@@ -398,6 +405,14 @@ export default function Admin() {
                       {status.last_init ? new Date(status.last_init).toLocaleString() : '—'}
                     </span>
                   </div>
+                  {status.firmware_version && (
+                    <div className="device-info">
+                      <span className="info-label">Firmware</span>
+                      <span className="info-value mono" style={{ color: 'var(--accent)' }}>
+                        v{status.firmware_version}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="config-divider" />

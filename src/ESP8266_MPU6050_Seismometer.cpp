@@ -1,10 +1,14 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
+#include <ESP8266httpUpdate.h>
 #include <Wire.h>
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "arduino_secrets.h"     // must define SECRET_SSID, SECRET_PASS, URL, ROOT_URL
 #include <ArduinoJson.h>
+
+// OTA firmware version — bump this string whenever new firmware is deployed
+#define FIRMWARE_VERSION "1.1.0"
 
 // I2C pins on NodeMCU
 #define SDA_PIN D2  // GPIO4
@@ -67,7 +71,8 @@ void setup() {
   // ─── Initialization API call ─────────────────────────────────
   HTTPClient initHttp;
   WiFiClient initClient;
-  String initUrl = String(ROOT_URL) + "api/init?id=" + deviceId;
+  // Include current firmware version so server can track what each device is running
+  String initUrl = String(ROOT_URL) + "api/init?id=" + deviceId + "&version=" + FIRMWARE_VERSION;
   Serial.printf("Fetching init config from %s ... ", initUrl.c_str());
   initHttp.begin(initClient, initUrl);
   int initCode = initHttp.GET();
@@ -78,7 +83,8 @@ void setup() {
   }
   String payload = initHttp.getString();
   initHttp.end();
-  StaticJsonDocument<256> doc;
+  // Increased buffer to 512 bytes to accommodate firmware_url in response
+  StaticJsonDocument<512> doc;
   DeserializationError err = deserializeJson(doc, payload);
   if (err) {
     Serial.println("JSON parse error, rebooting...");
@@ -90,6 +96,34 @@ void setup() {
   sensSevere = doc["sensitivity"]["severe"];
   Serial.printf("Config: heartbeatInterval=%lu, sensMinor=%.3f, sensModerate=%.3f, sensSevere=%.3f\n",
                 heartbeatInterval, sensMinor, sensModerate, sensSevere);
+
+  // ─── OTA Update Check ─────────────────────────────────────────
+  const char* serverFwVersion = doc["firmware_version"] | "";
+  const char* firmwareUrl     = doc["firmware_url"]     | "";
+  if (strlen(serverFwVersion) > 0 && strlen(firmwareUrl) > 0 &&
+      strcmp(serverFwVersion, FIRMWARE_VERSION) != 0) {
+    Serial.printf("OTA update available: %s → %s\n", FIRMWARE_VERSION, serverFwVersion);
+    Serial.printf("Downloading from: %s\n", firmwareUrl);
+    WiFiClient otaClient;
+    // ESPhttpUpdate.update() downloads, flashes, then auto-reboots on success
+    t_httpUpdate_return ret = ESPhttpUpdate.update(otaClient, firmwareUrl);
+    // Only reaches here if update failed
+    switch (ret) {
+      case HTTP_UPDATE_FAILED:
+        Serial.printf("OTA FAILED (%d): %s\n",
+          ESPhttpUpdate.getLastError(),
+          ESPhttpUpdate.getLastErrorString().c_str());
+        break;
+      case HTTP_UPDATE_NO_UPDATES:
+        Serial.println("OTA: Server says no update.");
+        break;
+      default:
+        break;
+    }
+    Serial.println("Continuing with current firmware after OTA attempt.");
+  } else {
+    Serial.printf("Firmware up to date: %s\n", FIRMWARE_VERSION);
+  }
   delay(500);
 
   // ─── Setup MPU6050 ─────────────────────────────────────────────
