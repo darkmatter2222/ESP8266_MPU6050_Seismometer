@@ -162,12 +162,12 @@ export default function App() {
   const panRef = useRef({ anchor: null, domain: null });
   const chartRef = useRef(null);
   const plotBoundsRef = useRef({ left: 0, width: 1, top: 0, height: 0 });
-  const yBoundsRef   = useRef({ top: 0, height: 1, domainMin: 0, domainMax: 1 });
+  const scaleRef = useRef({ x: null, y: null }); // Recharts d3 scales — exact pixel mapping
   const dragRef = useRef({ active: false, startPx: 0, curPx: 0, mode: null });
   const currentDomainRef = useRef([0, 1]);
-  const commitDragRef = useRef(null); // always-current commitDrag for window listener
-  const [selectionRect, setSelectionRect] = useState(null); // {startPx,curPx} for rendering
-  const [isDragging, setIsDragging] = useState(false);      // for pan cursor
+  const commitDragRef = useRef(null);
+  const [selectionRect, setSelectionRect] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   // ── Data Fetching ──────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -386,17 +386,14 @@ export default function App() {
   // Find the closest visible data point within THRESHOLD_PX pixels of (px, py)
   const findNearestPoint = (px, py) => {
     const THRESHOLD_PX = 20;
-    const { left: plotLeft, width: plotW } = plotBoundsRef.current;
-    const { top: plotTop, height: plotH, domainMin, domainMax } = yBoundsRef.current;
-    const [d0, d1] = currentDomainRef.current;
-    const xSpan = (d1 - d0) || 1;
-    const ySpan = (domainMax - domainMin) || 1;
+    const { x: xScale, y: yScale } = scaleRef.current;
+    if (!xScale || !yScale) return null;
     let nearest = null;
     let nearestDist = Infinity;
     for (const [, pts] of Object.entries(deviceGroups)) {
       for (const pt of pts) {
-        const ptPx = plotLeft + ((pt._time - d0) / xSpan) * plotW;
-        const ptPy = plotTop  + ((domainMax - pt.deltaG) / ySpan) * plotH;
+        const ptPx = xScale(pt._time);
+        const ptPy = yScale(pt.deltaG);
         const dist = Math.hypot(px - ptPx, py - ptPy);
         if (dist < nearestDist) { nearestDist = dist; nearest = { ...pt, _px: ptPx, _py: ptPy }; }
       }
@@ -709,14 +706,9 @@ export default function App() {
                     top:    ya.y      ?? 0,
                     height: ya.height ?? 0,
                   };
-                  if (ya.domain) {
-                    yBoundsRef.current = {
-                      top:       ya.y      ?? 0,
-                      height:    ya.height ?? 1,
-                      domainMin: ya.domain[0],
-                      domainMax: ya.domain[1],
-                    };
-                  }
+                  // Store the actual d3 scales — these give pixel-perfect coordinates
+                  if (xa.scale) scaleRef.current.x = xa.scale;
+                  if (ya.scale) scaleRef.current.y = ya.scale;
                 }
                 return null;
               }} />
