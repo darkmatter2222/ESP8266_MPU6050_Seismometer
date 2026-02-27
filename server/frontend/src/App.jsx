@@ -256,12 +256,24 @@ export default function App() {
   // Helpers: dataset bounds for zoom/gradient
   const xDataMin = useMemo(() => (seismicEvents.length ? Math.min(...seismicEvents.map(e => e._time)) : cutoff), [seismicEvents, cutoff]);
   const xDataMax = useMemo(() => (seismicEvents.length ? Math.max(...seismicEvents.map(e => e._time)) : Date.now()), [seismicEvents]);
+
+  // Full-range ΔG bounds (used as fallback)
   const [dgMin, dgMax] = useMemo(() => {
     if (!seismicEvents.length) return [0, 1];
     let mn = Infinity, mx = -Infinity;
     for (const e of seismicEvents) { if (e.deltaG < mn) mn = e.deltaG; if (e.deltaG > mx) mx = e.deltaG; }
     return [mn, mx];
   }, [seismicEvents]);
+
+  // Visible ΔG bounds — recomputed whenever zoom changes, used by gradient color mode
+  const [visDgMin, visDgMax] = useMemo(() => {
+    const [d0, d1] = xZoomDomain || [xDataMin, xDataMax];
+    const visible = seismicEvents.filter(e => e._time >= d0 && e._time <= d1);
+    if (!visible.length) return [dgMin, dgMax];
+    let mn = Infinity, mx = -Infinity;
+    for (const e of visible) { if (e.deltaG < mn) mn = e.deltaG; if (e.deltaG > mx) mx = e.deltaG; }
+    return [mn, mx];
+  }, [seismicEvents, xZoomDomain, xDataMin, xDataMax, dgMin, dgMax]);
 
   // Color mapping (hoisted functions so they're available below)
   function rampColor(t) {
@@ -271,7 +283,8 @@ export default function App() {
   function colorForPoint(e) {
     if (colorMode === 'level') return LEVEL_COLORS[e.level] || '#999';
     if (colorMode === 'device') return DEVICE_COLORS[e.alias] || '#999';
-    const t = dgMax > dgMin ? (e.deltaG - dgMin) / (dgMax - dgMin) : 0;
+    // gradient: normalize against visible range so the full color spectrum is always used
+    const t = visDgMax > visDgMin ? (e.deltaG - visDgMin) / (visDgMax - visDgMin) : 0;
     return rampColor(t);
   }
 
@@ -292,7 +305,7 @@ export default function App() {
       });
     }
     return groups;
-  }, [seismicEvents, deviceFilters, levelFilters]);
+  }, [seismicEvents, deviceFilters, levelFilters, colorMode, visDgMin, visDgMax]);
 
   // ── Computed: Key metrics ──────────────────────────────────────
   const metrics = useMemo(() => {
