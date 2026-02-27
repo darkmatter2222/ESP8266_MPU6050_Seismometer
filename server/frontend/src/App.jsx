@@ -640,21 +640,23 @@ export default function App() {
       </Panel>
 
       {/* Interaction overlay for mouse tools */}
-      <div
-        ref={chartRef}
-        className="chart-overlay"
-        onMouseDown={onOverlayDown}
-        onMouseMove={onOverlayMove}
-        onMouseUp={onOverlayUp}
-        onMouseLeave={onOverlayUp}
-        onWheel={onWheel}
-      >
-        {drag.active && (drag.mode === 'zoom' || drag.mode === 'select') && (
-          <div
-            className="selection-rect"
-            style={{ left: Math.min(drag.startPx, drag.curPx), width: Math.abs(drag.curPx - drag.startPx) }}
-          />
-        )}
+      <div className="panel main-chart-overlay">
+        <div
+          ref={chartRef}
+          className="chart-overlay"
+          onMouseDown={onOverlayDown}
+          onMouseMove={onOverlayMove}
+          onMouseUp={onOverlayUp}
+          onMouseLeave={onOverlayUp}
+          onWheel={onWheel}
+        >
+          {drag.active && (drag.mode === 'zoom' || drag.mode === 'select') && (
+            <div
+              className="selection-rect"
+              style={{ left: Math.min(drag.startPx, drag.curPx), width: Math.abs(drag.curPx - drag.startPx) }}
+            />
+          )}
+        </div>
       </div>
 
       {/* Removed secondary panels: Activity, Consensus table, Recent, API Traffic */}

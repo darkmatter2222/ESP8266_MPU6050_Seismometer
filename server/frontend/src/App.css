@@ -299,6 +299,12 @@ body {
   padding: 4px 0;
 }
 
+.main-chart-overlay {
+  position: relative;
+  margin-top: -8px; /* overlap the main chart panel exactly */
+  height: 0;
+}
+
 /* ═══ Bottom Grid ═════════════════════════════════════════════════ */
 .bottom-grid {
   display: grid;
