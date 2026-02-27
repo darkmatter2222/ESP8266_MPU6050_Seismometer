@@ -159,6 +159,8 @@ export default function App() {
   const [toolMode, setToolMode] = useState('zoom'); // 'zoom' | 'pan' | 'select'
   const [colorMode, setColorMode] = useState('level'); // 'level' | 'device' | 'gradient'
   const panRef = useRef({ anchor: null, domain: null });
+  const chartRef = useRef(null);
+  const [drag, setDrag] = useState({ active: false, startPx: null, curPx: null, mode: null });
 
   // ── Data Fetching ──────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -322,64 +324,86 @@ export default function App() {
     });
   }, [statuses, seismicEvents.length]);
 
-  // Zoom/select/pan handlers
-  const onZoomMouseDown = (e) => {
-    if (!e) return;
+  // Pixel-domain helpers
+  const currentDomain = useMemo(() => xZoomDomain || [xDataMin, xDataMax], [xZoomDomain, xDataMin, xDataMax]);
+  const pxToTime = useCallback((px) => {
+    const el = chartRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const w = rect.width || 1;
+    const t = currentDomain[0] + (px / w) * (currentDomain[1] - currentDomain[0]);
+    return t;
+  }, [currentDomain]);
+
+  // Overlay mouse handlers
+  const onOverlayDown = (ev) => {
+    if (ev.button !== 0) return; // left click only
+    const rect = chartRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ev.clientX - rect.left;
     if (toolMode === 'pan') {
-      if (e.activeLabel) {
-        panRef.current = { anchor: e.activeLabel, domain: xZoomDomain || [xDataMin, xDataMax] };
-      }
+      panRef.current = { anchor: x, domain: currentDomain };
+      setDrag({ active: true, startPx: x, curPx: x, mode: 'pan' });
     } else if (toolMode === 'zoom' || toolMode === 'select') {
-      if (e.activeLabel) setRefAreaStart(e.activeLabel);
+      setDrag({ active: true, startPx: x, curPx: x, mode: toolMode });
     }
   };
-  const onZoomMouseMove = (e) => {
-    if (!e) return;
-    if (toolMode === 'pan' && panRef.current.anchor && e.activeLabel) {
-      const { anchor, domain } = panRef.current;
-      const dx = e.activeLabel - anchor;
-      const width = domain[1] - domain[0];
-      let next = [domain[0] - dx, domain[1] - dx];
-      // clamp
-      const span = next[1] - next[0];
-      if (next[0] < xDataMin) { next = [xDataMin, xDataMin + span]; }
-      if (next[1] > xDataMax) { next = [xDataMax - span, xDataMax]; }
+  const onOverlayMove = (ev) => {
+    if (!drag.active) return;
+    const rect = chartRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ev.clientX - rect.left;
+    if (drag.mode === 'pan' && panRef.current.anchor != null) {
+      const dxPx = x - panRef.current.anchor;
+      const span = panRef.current.domain[1] - panRef.current.domain[0];
+      const rectW = rect.width || 1;
+      let next = [
+        panRef.current.domain[0] - (dxPx / rectW) * span,
+        panRef.current.domain[1] - (dxPx / rectW) * span,
+      ];
+      const width = next[1] - next[0];
+      if (next[0] < xDataMin) next = [xDataMin, xDataMin + width];
+      if (next[1] > xDataMax) next = [xDataMax - width, xDataMax];
       setXZoomDomain(next);
-    } else if ((toolMode === 'zoom' || toolMode === 'select') && refAreaStart && e.activeLabel) {
-      setRefAreaEnd(e.activeLabel);
+      setDrag(d => ({ ...d, curPx: x }));
+    } else {
+      setDrag(d => ({ ...d, curPx: x }));
     }
   };
-  const onZoomMouseUp = () => {
-    if (toolMode === 'zoom' && refAreaStart && refAreaEnd && Math.abs(refAreaStart - refAreaEnd) > 1000) {
-      const start = Math.min(refAreaStart, refAreaEnd);
-      const end = Math.max(refAreaStart, refAreaEnd);
-      setXZoomDomain([start, end]);
+  const onOverlayUp = () => {
+    if (!drag.active) return;
+    if ((drag.mode === 'zoom' || drag.mode === 'select') && Math.abs(drag.curPx - drag.startPx) > 6) {
+      const start = Math.min(drag.startPx, drag.curPx);
+      const end = Math.max(drag.startPx, drag.curPx);
+      const t0 = pxToTime(start);
+      const t1 = pxToTime(end);
+      if (drag.mode === 'zoom') {
+        setXZoomDomain([t0, t1]);
+      } else if (drag.mode === 'select') {
+        const inRange = seismicEvents.filter(e => e._time >= t0 && e._time <= t1)
+          .filter(e => levelFilters[e.level] && (deviceFilters[e.alias || e.id] ?? true));
+        setRangeModal({ start: t0, end: t1, events: inRange });
+      }
     }
-    if (toolMode === 'select' && refAreaStart && refAreaEnd && Math.abs(refAreaStart - refAreaEnd) > 1000) {
-      const start = Math.min(refAreaStart, refAreaEnd);
-      const end = Math.max(refAreaStart, refAreaEnd);
-      const inRange = seismicEvents.filter(e => e._time >= start && e._time <= end)
-        .filter(e => levelFilters[e.level] && (deviceFilters[e.alias || e.id] ?? true));
-      setRangeModal({ start, end, events: inRange });
-    }
+    setDrag({ active: false, startPx: null, curPx: null, mode: null });
     panRef.current = { anchor: null, domain: null };
-    setRefAreaStart(null);
-    setRefAreaEnd(null);
   };
   const resetZoom = () => setXZoomDomain(null);
   const onPointClick = (data) => { if (data && data.payload) setModalEvent(data.payload); };
 
-  const onWheel = (e) => {
-    // wheel zoom around cursor center using activeLabel approximation via refAreaStart fallback
-    const dom = xZoomDomain || [xDataMin, xDataMax];
-    const center = (dom[0] + dom[1]) / 2;
-    const factor = e.deltaY < 0 ? 0.8 : 1.25; // zoom in / out
-    const newHalf = (dom[1] - dom[0]) * factor / 2;
-    let next = [center - newHalf, center + newHalf];
-    // clamp to data
+  const onWheel = (ev) => {
+    const rect = chartRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ev.clientX - rect.left;
+    const dom = currentDomain;
+    const span = dom[1] - dom[0];
+    const center = dom[0] + (x / (rect.width || 1)) * span;
+    const factor = ev.deltaY < 0 ? 0.8 : 1.25;
+    const half = (span * factor) / 2;
+    let next = [center - half, center + half];
     if (next[0] < xDataMin) next[0] = xDataMin;
     if (next[1] > xDataMax) next[1] = xDataMax;
-    if (next[1] - next[0] < 2000) return; // avoid over-zoom (<2s span)
+    if (next[1] - next[0] < 2000) return;
     setXZoomDomain(next);
   };
 
@@ -600,17 +624,38 @@ export default function App() {
                   key={alias}
                   name={alias}
                   data={data}
-                  shape={(p) => <circle cx={p.cx} cy={p.cy} r={3} fill={p.payload._c} opacity={0.9} />}
+                  shape={(p) => (
+                    <g>
+                      {/* thin X mark */}
+                      <line x1={p.cx-3} y1={p.cy-3} x2={p.cx+3} y2={p.cy+3} stroke={p.payload._c} strokeWidth={1} />
+                      <line x1={p.cx-3} y1={p.cy+3} x2={p.cx+3} y2={p.cy-3} stroke={p.payload._c} strokeWidth={1} />
+                    </g>
+                  )}
                   onClick={onPointClick}
                 />
               ))}
-              {refAreaStart && refAreaEnd && (
-                <ReferenceArea x1={refAreaStart} x2={refAreaEnd} strokeOpacity={0.2} />
-              )}
             </ScatterChart>
           </ResponsiveContainer>
         )}
       </Panel>
+
+      {/* Interaction overlay for mouse tools */}
+      <div
+        ref={chartRef}
+        className="chart-overlay"
+        onMouseDown={onOverlayDown}
+        onMouseMove={onOverlayMove}
+        onMouseUp={onOverlayUp}
+        onMouseLeave={onOverlayUp}
+        onWheel={onWheel}
+      >
+        {drag.active && (drag.mode === 'zoom' || drag.mode === 'select') && (
+          <div
+            className="selection-rect"
+            style={{ left: Math.min(drag.startPx, drag.curPx), width: Math.abs(drag.curPx - drag.startPx) }}
+          />
+        )}
+      </div>
 
       {/* Removed secondary panels: Activity, Consensus table, Recent, API Traffic */}
 

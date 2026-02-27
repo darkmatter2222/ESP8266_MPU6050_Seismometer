@@ -62,7 +62,7 @@ body {
   height: 100vh;
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: 48px 44px auto 1fr 1fr;
+  grid-template-rows: 48px 44px auto 1fr;
   gap: 8px;
   padding: 10px 12px;
 }
@@ -452,6 +452,21 @@ body {
 
 .recharts-cartesian-axis-tick-value {
   fill: var(--text-dim) !important;
+}
+
+/* ═══ Interaction Overlay ════════════════════════════════════════ */
+.chart-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: transparent;
+}
+.selection-rect {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: rgba(0, 255, 136, 0.10);
+  border: 1px solid var(--accent);
+  pointer-events: none;
 }
 
 /* ═══ Modal ═════════════════════════════════════════════════════ */
