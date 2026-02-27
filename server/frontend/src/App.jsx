@@ -581,6 +581,7 @@ export default function App() {
         {seismicEvents.length === 0 ? (
           <div className="empty-state">No seismic events in this period</div>
         ) : (
+          <div className="chart-wrapper">
           <ResponsiveContainer width="100%" height="100%">
             <ScatterChart
               margin={{ top: 8, right: 16, bottom: 4, left: 0 }}
@@ -632,28 +633,26 @@ export default function App() {
               ))}
             </ScatterChart>
           </ResponsiveContainer>
+          <div
+            ref={chartRef}
+            className="chart-overlay"
+            style={{ cursor: toolMode === 'pan' ? (drag.active ? 'grabbing' : 'grab') : toolMode === 'select' ? 'crosshair' : 'zoom-in' }}
+            onMouseDown={onOverlayDown}
+            onMouseMove={onOverlayMove}
+            onMouseUp={onOverlayUp}
+            onMouseLeave={onOverlayUp}
+            onWheel={onWheel}
+          >
+            {drag.active && (drag.mode === 'zoom' || drag.mode === 'select') && (
+              <div
+                className="selection-rect"
+                style={{ left: Math.min(drag.startPx, drag.curPx), width: Math.abs(drag.curPx - drag.startPx) }}
+              />
+            )}
+          </div>
+          </div>
         )}
       </Panel>
-
-      {/* Interaction overlay for mouse tools */}
-      <div className="panel main-chart-overlay">
-        <div
-          ref={chartRef}
-          className="chart-overlay"
-          onMouseDown={onOverlayDown}
-          onMouseMove={onOverlayMove}
-          onMouseUp={onOverlayUp}
-          onMouseLeave={onOverlayUp}
-          onWheel={onWheel}
-        >
-          {drag.active && (drag.mode === 'zoom' || drag.mode === 'select') && (
-            <div
-              className="selection-rect"
-              style={{ left: Math.min(drag.startPx, drag.curPx), width: Math.abs(drag.curPx - drag.startPx) }}
-            />
-          )}
-        </div>
-      </div>
 
       {/* Removed secondary panels: Activity, Consensus table, Recent, API Traffic */}
 
