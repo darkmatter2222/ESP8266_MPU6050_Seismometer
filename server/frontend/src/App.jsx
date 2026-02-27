@@ -401,15 +401,21 @@ export default function App() {
     if (!dragRef.current.active) return;
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const x = ev.clientX - rect.left;
+    const rawX = ev.clientX - rect.left;
+    // For zoom/select: clamp to the plot data area so selection can't exceed the axes
+    const { left: plotLeft, width: plotW } = plotBoundsRef.current;
+    const plotRight = plotLeft + plotW;
+    const x = (dragRef.current.mode === 'pan')
+      ? rawX
+      : Math.max(plotLeft, Math.min(plotRight, rawX));
     dragRef.current.curPx = x;
     if (dragRef.current.mode === 'pan' && panRef.current.anchor != null) {
-      const dxPx = x - panRef.current.anchor;
+      const dxPx = rawX - panRef.current.anchor;
       const span = panRef.current.domain[1] - panRef.current.domain[0];
-      const plotW = plotBoundsRef.current.width || 1;
+      const pw = plotW || 1;
       let next = [
-        panRef.current.domain[0] - (dxPx / plotW) * span,
-        panRef.current.domain[1] - (dxPx / plotW) * span,
+        panRef.current.domain[0] - (dxPx / pw) * span,
+        panRef.current.domain[1] - (dxPx / pw) * span,
       ];
       const w = next[1] - next[0];
       if (next[0] < xDataMin) next = [xDataMin, xDataMin + w];
@@ -694,7 +700,6 @@ export default function App() {
             onMouseDown={onOverlayDown}
             onMouseMove={onOverlayMove}
             onMouseUp={onOverlayUp}
-            onMouseLeave={cancelDrag}
             onWheel={onWheel}
           >
             {selectionRect && (
