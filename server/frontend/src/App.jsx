@@ -244,6 +244,28 @@ export default function App() {
     return { seismicEvents: seismic, consensusEvents: consensus };
   }, [events, cutoff]);
 
+  // Helpers: dataset bounds for zoom/gradient
+  const xDataMin = useMemo(() => (seismicEvents.length ? Math.min(...seismicEvents.map(e => e._time)) : cutoff), [seismicEvents, cutoff]);
+  const xDataMax = useMemo(() => (seismicEvents.length ? Math.max(...seismicEvents.map(e => e._time)) : Date.now()), [seismicEvents]);
+  const [dgMin, dgMax] = useMemo(() => {
+    if (!seismicEvents.length) return [0, 1];
+    let mn = Infinity, mx = -Infinity;
+    for (const e of seismicEvents) { if (e.deltaG < mn) mn = e.deltaG; if (e.deltaG > mx) mx = e.deltaG; }
+    return [mn, mx];
+  }, [seismicEvents]);
+
+  // Color mapping (hoisted functions so they're available below)
+  function rampColor(t) {
+    const h = 120 - 120 * Math.min(1, Math.max(0, t));
+    return `hsl(${h}, 100%, 50%)`;
+  }
+  function colorForPoint(e) {
+    if (colorMode === 'level') return LEVEL_COLORS[e.level] || '#999';
+    if (colorMode === 'device') return DEVICE_COLORS[e.alias] || '#999';
+    const t = dgMax > dgMin ? (e.deltaG - dgMin) / (dgMax - dgMin) : 0;
+    return rampColor(t);
+  }
+
   // ── Computed: Device groups for scatter chart ──────────────────
   const deviceGroups = useMemo(() => {
     const groups = {};
@@ -284,16 +306,6 @@ export default function App() {
       consensusCount: consensusEvents.length,
     };
   }, [seismicEvents, consensusEvents]);
-
-  // Helpers: dataset bounds for zoom/gradient
-  const xDataMin = useMemo(() => (seismicEvents.length ? Math.min(...seismicEvents.map(e => e._time)) : cutoff), [seismicEvents, cutoff]);
-  const xDataMax = useMemo(() => (seismicEvents.length ? Math.max(...seismicEvents.map(e => e._time)) : Date.now()), [seismicEvents]);
-  const [dgMin, dgMax] = useMemo(() => {
-    if (!seismicEvents.length) return [0, 1];
-    let mn = Infinity, mx = -Infinity;
-    for (const e of seismicEvents) { if (e.deltaG < mn) mn = e.deltaG; if (e.deltaG > mx) mx = e.deltaG; }
-    return [mn, mx];
-  }, [seismicEvents]);
 
   // ── Thresholds ────────────────────────────────────────────────
   const thresholds = { minor: 0.035, moderate: 0.10, severe: 0.50 };
@@ -371,18 +383,7 @@ export default function App() {
     setXZoomDomain(next);
   };
 
-  // Color mapping
-  function rampColor(t) {
-    // t in [0,1] → green→yellow→red
-    const h = 120 - 120 * Math.min(1, Math.max(0, t)); // 120=green to 0=red
-    return `hsl(${h}, 100%, 50%)`;
-  }
-  const colorForPoint = (e) => {
-    if (colorMode === 'level') return LEVEL_COLORS[e.level] || '#999';
-    if (colorMode === 'device') return DEVICE_COLORS[e.alias] || '#999';
-    const t = dgMax > dgMin ? (e.deltaG - dgMin) / (dgMax - dgMin) : 0;
-    return rampColor(t);
-  };
+  // Color mapping moved above deviceGroups
 
   const exportCsv = (rows, filename = 'events.csv') => {
     const header = ['time','alias','level','deltaG'];
