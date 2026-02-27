@@ -4,7 +4,6 @@ import { io } from 'socket.io-client';
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine, ReferenceArea,
-  ComposedChart, Bar, Line, AreaChart, Area, Brush,
 } from 'recharts';
 
 // ╔══════════════════════════════════════════════════════════════════╗
@@ -157,7 +156,9 @@ export default function App() {
   const [refAreaEnd, setRefAreaEnd] = useState(null);
   const [modalEvent, setModalEvent] = useState(null);
   const [rangeModal, setRangeModal] = useState(null); // {start,end,events}
-  const [recentsLimit, setRecentsLimit] = useState(25);
+  const [toolMode, setToolMode] = useState('zoom'); // 'zoom' | 'pan' | 'select'
+  const [colorMode, setColorMode] = useState('level'); // 'level' | 'device' | 'gradient'
+  const panRef = useRef({ anchor: null, domain: null });
 
   // ── Data Fetching ──────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -256,6 +257,7 @@ export default function App() {
         deltaG: e.deltaG,
         level: e.level,
         alias: key,
+        _c: colorForPoint({ ...e, alias: key })
       });
     }
     return groups;
@@ -283,52 +285,15 @@ export default function App() {
     };
   }, [seismicEvents, consensusEvents]);
 
-  // ── Computed: Activity chart data (stacked bars by severity) ──
-  const activityData = useMemo(() => {
-    const bucketMs = period === '24h' ? 3_600_000 : 86_400_000;
-    const buckets = new Map();
-    for (const e of seismicEvents) {
-      const t = Math.floor(e._time / bucketMs) * bucketMs;
-      if (!buckets.has(t)) {
-        buckets.set(t, { time: t, minor: 0, moderate: 0, severe: 0, maxDg: 0 });
-      }
-      const b = buckets.get(t);
-      b[e.level] = (b[e.level] || 0) + 1;
-      if (e.deltaG > b.maxDg) b.maxDg = e.deltaG;
-    }
-    return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
-  }, [seismicEvents, period]);
-
-  // ── Computed: Traffic chart data ──────────────────────────────
-  const trafficData = useMemo(() => {
-    const bucketMs = period === '24h' ? 300_000 : 3_600_000;
-    const buckets = new Map();
-    for (const log of httpLogs) {
-      const t = new Date(log.timestamp).getTime();
-      if (t < cutoff) continue;
-      const bt = Math.floor(t / bucketMs) * bucketMs;
-      if (!buckets.has(bt)) buckets.set(bt, { time: bt, seismic: 0, status: 0, events: 0, other: 0 });
-      const b = buckets.get(bt);
-      if (log.endpoint === '/api/seismic') b.seismic++;
-      else if (log.endpoint === '/api/status') b.status++;
-      else if (log.endpoint === '/api/events') b.events++;
-      else b.other++;
-    }
-    return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
-  }, [httpLogs, cutoff, period]);
-
-  // ── Computed: Recent events ───────────────────────────────────
-  const recentEvents = useMemo(() => {
-    return [...seismicEvents]
-      .filter(e => levelFilters[e.level] && (!Object.keys(deviceFilters).length || deviceFilters[e.alias || e.id] !== false))
-      .sort((a, b) => b._time - a._time)
-      .slice(0, recentsLimit);
-  }, [seismicEvents, levelFilters, deviceFilters, recentsLimit]);
-
-  // ── Computed: Consensus details ───────────────────────────────
-  const consensusDetails = useMemo(() => {
-    return [...consensusEvents].sort((a, b) => b._time - a._time).slice(0, 20);
-  }, [consensusEvents]);
+  // Helpers: dataset bounds for zoom/gradient
+  const xDataMin = useMemo(() => (seismicEvents.length ? Math.min(...seismicEvents.map(e => e._time)) : cutoff), [seismicEvents, cutoff]);
+  const xDataMax = useMemo(() => (seismicEvents.length ? Math.max(...seismicEvents.map(e => e._time)) : Date.now()), [seismicEvents]);
+  const [dgMin, dgMax] = useMemo(() => {
+    if (!seismicEvents.length) return [0, 1];
+    let mn = Infinity, mx = -Infinity;
+    for (const e of seismicEvents) { if (e.deltaG < mn) mn = e.deltaG; if (e.deltaG > mx) mx = e.deltaG; }
+    return [mn, mx];
+  }, [seismicEvents]);
 
   // ── Thresholds ────────────────────────────────────────────────
   const thresholds = { minor: 0.035, moderate: 0.10, severe: 0.50 };
@@ -345,23 +310,79 @@ export default function App() {
     });
   }, [statuses, seismicEvents.length]);
 
-  // Zoom & range selection handlers
-  const onZoomMouseDown = (e) => { if (e && e.activeLabel) setRefAreaStart(e.activeLabel); };
-  const onZoomMouseMove = (e) => { if (refAreaStart && e && e.activeLabel) setRefAreaEnd(e.activeLabel); };
+  // Zoom/select/pan handlers
+  const onZoomMouseDown = (e) => {
+    if (!e) return;
+    if (toolMode === 'pan') {
+      if (e.activeLabel) {
+        panRef.current = { anchor: e.activeLabel, domain: xZoomDomain || [xDataMin, xDataMax] };
+      }
+    } else if (toolMode === 'zoom' || toolMode === 'select') {
+      if (e.activeLabel) setRefAreaStart(e.activeLabel);
+    }
+  };
+  const onZoomMouseMove = (e) => {
+    if (!e) return;
+    if (toolMode === 'pan' && panRef.current.anchor && e.activeLabel) {
+      const { anchor, domain } = panRef.current;
+      const dx = e.activeLabel - anchor;
+      const width = domain[1] - domain[0];
+      let next = [domain[0] - dx, domain[1] - dx];
+      // clamp
+      const span = next[1] - next[0];
+      if (next[0] < xDataMin) { next = [xDataMin, xDataMin + span]; }
+      if (next[1] > xDataMax) { next = [xDataMax - span, xDataMax]; }
+      setXZoomDomain(next);
+    } else if ((toolMode === 'zoom' || toolMode === 'select') && refAreaStart && e.activeLabel) {
+      setRefAreaEnd(e.activeLabel);
+    }
+  };
   const onZoomMouseUp = () => {
-    if (refAreaStart && refAreaEnd && Math.abs(refAreaStart - refAreaEnd) > 1000) {
+    if (toolMode === 'zoom' && refAreaStart && refAreaEnd && Math.abs(refAreaStart - refAreaEnd) > 1000) {
       const start = Math.min(refAreaStart, refAreaEnd);
       const end = Math.max(refAreaStart, refAreaEnd);
       setXZoomDomain([start, end]);
+    }
+    if (toolMode === 'select' && refAreaStart && refAreaEnd && Math.abs(refAreaStart - refAreaEnd) > 1000) {
+      const start = Math.min(refAreaStart, refAreaEnd);
+      const end = Math.max(refAreaStart, refAreaEnd);
       const inRange = seismicEvents.filter(e => e._time >= start && e._time <= end)
         .filter(e => levelFilters[e.level] && (deviceFilters[e.alias || e.id] ?? true));
       setRangeModal({ start, end, events: inRange });
     }
+    panRef.current = { anchor: null, domain: null };
     setRefAreaStart(null);
     setRefAreaEnd(null);
   };
   const resetZoom = () => setXZoomDomain(null);
   const onPointClick = (data) => { if (data && data.payload) setModalEvent(data.payload); };
+
+  const onWheel = (e) => {
+    // wheel zoom around cursor center using activeLabel approximation via refAreaStart fallback
+    const dom = xZoomDomain || [xDataMin, xDataMax];
+    const center = (dom[0] + dom[1]) / 2;
+    const factor = e.deltaY < 0 ? 0.8 : 1.25; // zoom in / out
+    const newHalf = (dom[1] - dom[0]) * factor / 2;
+    let next = [center - newHalf, center + newHalf];
+    // clamp to data
+    if (next[0] < xDataMin) next[0] = xDataMin;
+    if (next[1] > xDataMax) next[1] = xDataMax;
+    if (next[1] - next[0] < 2000) return; // avoid over-zoom (<2s span)
+    setXZoomDomain(next);
+  };
+
+  // Color mapping
+  function rampColor(t) {
+    // t in [0,1] → green→yellow→red
+    const h = 120 - 120 * Math.min(1, Math.max(0, t)); // 120=green to 0=red
+    return `hsl(${h}, 100%, 50%)`;
+  }
+  const colorForPoint = (e) => {
+    if (colorMode === 'level') return LEVEL_COLORS[e.level] || '#999';
+    if (colorMode === 'device') return DEVICE_COLORS[e.alias] || '#999';
+    const t = dgMax > dgMin ? (e.deltaG - dgMin) / (dgMax - dgMin) : 0;
+    return rampColor(t);
+  };
 
   const exportCsv = (rows, filename = 'events.csv') => {
     const header = ['time','alias','level','deltaG'];
@@ -462,13 +483,38 @@ export default function App() {
             </label>
           ))}
         </div>
+        <div className="filter-group">
+          <span className="control-label">Color:</span>
+          <select className="tz-select" value={colorMode} onChange={e => setColorMode(e.target.value)}>
+            <option value="level">By Level</option>
+            <option value="device">By Device</option>
+            <option value="gradient">By ΔG Gradient</option>
+          </select>
+        </div>
+        <div className="filter-group">
+          <span className="control-label">Tool:</span>
+          <div className="period-toggle">
+            {['zoom','pan','select'].map(m => (
+              <button key={m} className={`period-btn ${toolMode===m?'active':''}`} onClick={()=>setToolMode(m)}>
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
         <label className="chk">
           <input type="checkbox" checked={showConsensus} onChange={e => setShowConsensus(e.target.checked)} />
           <span>Show consensus markers</span>
         </label>
-        {xZoomDomain && (
-          <button className="btn" onClick={resetZoom}>Reset Zoom</button>
-        )}
+        <button className="btn" onClick={() => {
+          const dom = xZoomDomain || [xDataMin, xDataMax];
+          const center = (dom[0]+dom[1])/2; const span = (dom[1]-dom[0])*0.8/2; setXZoomDomain([center-span, center+span]);
+        }}>Zoom In</button>
+        <button className="btn" onClick={() => {
+          const dom = xZoomDomain || [xDataMin, xDataMax];
+          const center = (dom[0]+dom[1])/2; const span = (dom[1]-dom[0])*1.25/2; let next=[center-span, center+span];
+          if (next[0]<xDataMin) next[0]=xDataMin; if (next[1]>xDataMax) next[1]=xDataMax; setXZoomDomain(next);
+        }}>Zoom Out</button>
+        <button className="btn" onClick={resetZoom} disabled={!xZoomDomain}>Reset Zoom</button>
       </div>
 
       {/* ─── Status Row ──────────────────────────────────────── */}
@@ -516,6 +562,7 @@ export default function App() {
               onMouseDown={onZoomMouseDown}
               onMouseMove={onZoomMouseMove}
               onMouseUp={onZoomMouseUp}
+              onWheel={onWheel}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
               <XAxis
@@ -552,9 +599,7 @@ export default function App() {
                   key={alias}
                   name={alias}
                   data={data}
-                  fill={deviceColor(alias)}
-                  fillOpacity={0.8}
-                  r={3}
+                  shape={(p) => <circle cx={p.cx} cy={p.cy} r={3} fill={p.payload._c} opacity={0.9} />}
                   onClick={onPointClick}
                 />
               ))}
@@ -566,148 +611,7 @@ export default function App() {
         )}
       </Panel>
 
-      {/* ─── Bottom Grid ─────────────────────────────────────── */}
-      <div className="bottom-grid">
-
-        {/* Activity Chart */}
-        <Panel title="Event Activity by Severity">
-          {activityData.length === 0 ? (
-            <div className="empty-state">No activity data</div>
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={activityData} margin={{ top: 8, right: 40, bottom: 24, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis
-                  dataKey="time"
-                  type="number"
-                  domain={['dataMin', 'dataMax']}
-                  tickFormatter={t => fmtTick(t, timezone, period)}
-                  tick={{ fill: '#666', fontSize: 10 }}
-                  tickCount={6}
-                />
-                <YAxis
-                  yAxisId="count"
-                  tick={{ fill: '#666', fontSize: 10 }}
-                  label={{ value: 'Count', angle: -90, position: 'insideLeft', fill: '#555', fontSize: 10 }}
-                />
-                <YAxis
-                  yAxisId="dg"
-                  orientation="right"
-                  tick={{ fill: '#666', fontSize: 10 }}
-                  tickFormatter={v => v.toFixed(2)}
-                  label={{ value: 'Max ΔG', angle: 90, position: 'insideRight', fill: '#555', fontSize: 10 }}
-                />
-                <Tooltip content={props => <ActivityTooltip {...props} tz={timezone} />} />
-                <Legend iconSize={8} wrapperStyle={{ fontSize: 10, paddingTop: 4 }} />
-                <Bar yAxisId="count" dataKey="severe"   name="Severe"   stackId="s" fill="#ff3366" radius={[2,2,0,0]} />
-                <Bar yAxisId="count" dataKey="moderate" name="Moderate" stackId="s" fill="#ffaa00" radius={[0,0,0,0]} />
-                <Bar yAxisId="count" dataKey="minor"    name="Minor"    stackId="s" fill="#00ff88" radius={[0,0,0,0]} />
-                <Line yAxisId="dg" dataKey="maxDg" name="Max ΔG" stroke="#ffffff60" dot={false} strokeWidth={1.5} />
-                <Brush dataKey="time" height={18} stroke="#00ff88" travellerWidth={8} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          )}
-        </Panel>
-
-        {/* Consensus Events */}
-        <Panel title={`Consensus Events (${consensusDetails.length})`}>
-          {consensusDetails.length === 0 ? (
-            <div className="empty-state">No consensus events</div>
-          ) : (
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Devices</th>
-                    <th>Ago</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {consensusDetails.map((c, i) => (
-                    <tr key={i}>
-                      <td className="mono">{fmtTs(c._time, timezone)}</td>
-                      <td>{(c.aliases || []).join(', ')}</td>
-                      <td className="muted">{timeAgo(c._time)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="table-actions">
-                <button className="btn" onClick={() => setRecentsLimit(l => l + 50)}>Show more</button>
-                {recentsLimit > 25 && (
-                  <button className="btn" onClick={() => setRecentsLimit(25)}>Show less</button>
-                )}
-                <button className="btn" onClick={() => exportCsv(recentEvents, 'recent_events.csv')}>Export CSV</button>
-              </div>
-            </div>
-          )}
-        </Panel>
-
-        {/* Recent Events */}
-        <Panel title="Recent Events">
-          {recentEvents.length === 0 ? (
-            <div className="empty-state">No recent events</div>
-          ) : (
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Device</th>
-                    <th>Level</th>
-                    <th>ΔG</th>
-                    <th>Ago</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentEvents.map((e, i) => (
-                    <tr key={i}>
-                      <td className="mono">{fmtTs(e._time, timezone)}</td>
-                      <td style={{ color: deviceColor(e.alias) }}>{e.alias}</td>
-                      <td>
-                        <span className={`level-badge ${e.level}`}>{e.level}</span>
-                      </td>
-                      <td className="mono">{e.deltaG?.toFixed(4)}</td>
-                      <td className="muted">{timeAgo(e._time)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
-
-        {/* HTTP Traffic */}
-        <Panel title="API Traffic">
-          {trafficData.length === 0 ? (
-            <div className="empty-state">No traffic data</div>
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={trafficData} margin={{ top: 8, right: 16, bottom: 24, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis
-                  dataKey="time"
-                  type="number"
-                  domain={['dataMin', 'dataMax']}
-                  tickFormatter={t => fmtTick(t, timezone, period)}
-                  tick={{ fill: '#666', fontSize: 10 }}
-                  tickCount={6}
-                />
-                <YAxis tick={{ fill: '#666', fontSize: 10 }} />
-                <Tooltip content={props => <ActivityTooltip {...props} tz={timezone} />} />
-                <Legend iconSize={8} wrapperStyle={{ fontSize: 10, paddingTop: 4 }} />
-                <Area type="monotone" dataKey="seismic" name="/api/seismic" stackId="1" stroke="#00ff88" fill="#00ff8820" />
-                <Area type="monotone" dataKey="status"  name="/api/status"  stackId="1" stroke="#00aaff" fill="#00aaff20" />
-                <Area type="monotone" dataKey="events"  name="/api/events"  stackId="1" stroke="#ff6644" fill="#ff664420" />
-                <Area type="monotone" dataKey="other"   name="other"        stackId="1" stroke="#888"    fill="#88888820" />
-                <Brush dataKey="time" height={18} stroke="#00ff88" travellerWidth={8} />
-              </AreaChart>
-            </ResponsiveContainer>
-          )}
-        </Panel>
-
-      </div>
+      {/* Removed secondary panels: Activity, Consensus table, Recent, API Traffic */}
 
       {/* ─── Event Modal ───────────────────────────────────── */}
       {modalEvent && (
