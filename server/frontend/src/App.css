@@ -482,6 +482,59 @@ body {
   pointer-events: none;
 }
 
+/* ═══ Inspect Tool ════════════════════════════════════════════════ */
+.cursor-line-v {
+  position: absolute;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.22);
+  pointer-events: none;
+  z-index: 4;
+}
+.cursor-line-h {
+  position: absolute;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.22);
+  pointer-events: none;
+  z-index: 4;
+}
+.hover-popup {
+  position: absolute;
+  background: rgba(10, 10, 24, 0.96);
+  border: 1px solid var(--border-h);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  line-height: 1.7;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+  backdrop-filter: blur(10px);
+  min-width: 155px;
+}
+.hover-popup-title {
+  font-weight: 700;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.hover-popup-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+}
+.hover-popup-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.hover-popup-hint {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  text-align: right;
+  opacity: 0.6;
+}
+
 /* ═══ Modal ═════════════════════════════════════════════════════ */
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.5);

@@ -156,11 +156,13 @@ export default function App() {
   const [refAreaEnd, setRefAreaEnd] = useState(null);
   const [modalEvent, setModalEvent] = useState(null);
   const [rangeModal, setRangeModal] = useState(null); // {start,end,events}
-  const [toolMode, setToolMode] = useState('zoom'); // 'zoom' | 'pan' | 'select'
+  const [toolMode, setToolMode] = useState('zoom'); // 'zoom' | 'pan' | 'range' | 'select'
   const [colorMode, setColorMode] = useState('level'); // 'level' | 'device' | 'gradient'
+  const [hoverState, setHoverState] = useState(null); // {pixelX,pixelY,point} | null
   const panRef = useRef({ anchor: null, domain: null });
   const chartRef = useRef(null);
   const plotBoundsRef = useRef({ left: 0, width: 1, top: 0, height: 0 });
+  const yBoundsRef   = useRef({ top: 0, height: 1, domainMin: 0, domainMax: 1 });
   const dragRef = useRef({ active: false, startPx: 0, curPx: 0, mode: null });
   const currentDomainRef = useRef([0, 1]);
   const commitDragRef = useRef(null); // always-current commitDrag for window listener
@@ -356,7 +358,7 @@ export default function App() {
   const commitDrag = () => {
     const d = dragRef.current;
     if (!d.active) return;
-    if ((d.mode === 'zoom' || d.mode === 'select') && Math.abs(d.curPx - d.startPx) > 6) {
+    if ((d.mode === 'zoom' || d.mode === 'range') && Math.abs(d.curPx - d.startPx) > 6) {
       const start = Math.min(d.startPx, d.curPx);
       const end   = Math.max(d.startPx, d.curPx);
       const t0 = pxToTime(start);
@@ -381,8 +383,34 @@ export default function App() {
     return () => window.removeEventListener('mouseup', onWinUp);
   }, []);
 
+  // Find the closest visible data point within THRESHOLD_PX pixels of (px, py)
+  const findNearestPoint = (px, py) => {
+    const THRESHOLD_PX = 20;
+    const { left: plotLeft, width: plotW } = plotBoundsRef.current;
+    const { top: plotTop, height: plotH, domainMin, domainMax } = yBoundsRef.current;
+    const [d0, d1] = currentDomainRef.current;
+    const xSpan = (d1 - d0) || 1;
+    const ySpan = (domainMax - domainMin) || 1;
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const [, pts] of Object.entries(deviceGroups)) {
+      for (const pt of pts) {
+        const ptPx = plotLeft + ((pt._time - d0) / xSpan) * plotW;
+        const ptPy = plotTop  + ((domainMax - pt.deltaG) / ySpan) * plotH;
+        const dist = Math.hypot(px - ptPx, py - ptPy);
+        if (dist < nearestDist) { nearestDist = dist; nearest = { ...pt, _px: ptPx, _py: ptPy }; }
+      }
+    }
+    return nearestDist <= THRESHOLD_PX ? nearest : null;
+  };
+
   const onOverlayDown = (ev) => {
     if (ev.button !== 0) return;
+    if (toolMode === 'select') {
+      // In inspect mode a click opens the modal for the nearest point
+      if (hoverState?.point) setModalEvent(hoverState.point);
+      return;
+    }
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ev.clientX - rect.left;
@@ -398,11 +426,20 @@ export default function App() {
   };
 
   const onOverlayMove = (ev) => {
-    if (!dragRef.current.active) return;
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const rawX = ev.clientX - rect.left;
-    // For zoom/select: clamp to the plot data area so selection can't exceed the axes
+    const rawY = ev.clientY - rect.top;
+
+    // Inspect (select) mode: crosshair + hover popup, no drag
+    if (toolMode === 'select') {
+      const pt = findNearestPoint(rawX, rawY);
+      setHoverState({ pixelX: pt ? pt._px : rawX, pixelY: pt ? pt._py : rawY, point: pt });
+      return;
+    }
+
+    if (!dragRef.current.active) return;
+    // For zoom/range: clamp to the plot data area so selection can't exceed the axes
     const { left: plotLeft, width: plotW } = plotBoundsRef.current;
     const plotRight = plotLeft + plotW;
     const x = (dragRef.current.mode === 'pan')
@@ -427,6 +464,14 @@ export default function App() {
   };
 
   const onOverlayUp = () => commitDrag();
+
+  const onOverlayLeave = () => {
+    if (toolMode === 'select') setHoverState(null);
+    // Do NOT cancelDrag here — window mouseup handles commit for all other modes
+  };
+
+  // Clear hover state when switching away from inspect mode
+  useEffect(() => { if (toolMode !== 'select') setHoverState(null); }, [toolMode]);
 
   const resetZoom = () => setXZoomDomain(null);
   const onPointClick = (data) => { if (data?.payload) setModalEvent(data.payload); };
@@ -562,9 +607,9 @@ export default function App() {
         <div className="filter-group">
           <span className="control-label">Tool:</span>
           <div className="period-toggle">
-            {['zoom','pan','select'].map(m => (
+            {[['zoom','Zoom'],['pan','Pan'],['range','Range'],['select','Inspect']].map(([m,label]) => (
               <button key={m} className={`period-btn ${toolMode===m?'active':''}`} onClick={()=>setToolMode(m)}>
-                {m}
+                {label}
               </button>
             ))}
           </div>
@@ -659,11 +704,19 @@ export default function App() {
                 const ya = yAxisMap && (yAxisMap[0] ?? Object.values(yAxisMap)[0]);
                 if (xa && ya) {
                   plotBoundsRef.current = {
-                    left:   xa.x   ?? 0,
+                    left:   xa.x      ?? 0,
                     width:  xa.width  ?? 1,
-                    top:    ya.y   ?? 0,
+                    top:    ya.y      ?? 0,
                     height: ya.height ?? 0,
                   };
+                  if (ya.domain) {
+                    yBoundsRef.current = {
+                      top:       ya.y      ?? 0,
+                      height:    ya.height ?? 1,
+                      domainMin: ya.domain[0],
+                      domainMax: ya.domain[1],
+                    };
+                  }
                 }
                 return null;
               }} />
@@ -696,12 +749,19 @@ export default function App() {
           <div
             ref={chartRef}
             className="chart-overlay"
-            style={{ cursor: toolMode === 'pan' ? (isDragging ? 'grabbing' : 'grab') : toolMode === 'select' ? 'crosshair' : 'zoom-in' }}
+            style={{ cursor:
+              toolMode === 'pan'    ? (isDragging ? 'grabbing' : 'grab') :
+              toolMode === 'range'  ? 'crosshair' :
+              toolMode === 'select' ? 'none' :
+              'zoom-in'
+            }}
             onMouseDown={onOverlayDown}
             onMouseMove={onOverlayMove}
             onMouseUp={onOverlayUp}
+            onMouseLeave={onOverlayLeave}
             onWheel={onWheel}
           >
+            {/* Zoom / Range selection ghost */}
             {selectionRect && (
               <div
                 className="selection-rect"
@@ -713,6 +773,30 @@ export default function App() {
                 }}
               />
             )}
+            {/* Inspect (select) mode crosshair + hover popup */}
+            {toolMode === 'select' && hoverState && (() => {
+              const { left: pL, width: pW, top: pT, height: pH } = plotBoundsRef.current;
+              const { pixelX, pixelY, point } = hoverState;
+              const flipX = pixelX > pL + pW * 0.6;
+              return (
+                <>
+                  <div className="cursor-line-v" style={{ left: pixelX, top: pT, height: pH }} />
+                  <div className="cursor-line-h" style={{ top: pixelY, left: pL, width: pW }} />
+                  {point && (
+                    <div className="hover-popup" style={{
+                      left:  flipX ? pixelX - 180 : pixelX + 14,
+                      top:   Math.max(pT, pixelY - 10),
+                    }}>
+                      <div className="hover-popup-title" style={{ color: point._c }}>{point.alias}</div>
+                      <div className="hover-popup-row"><span>ΔG</span><span className="mono">{point.deltaG?.toFixed(5)}</span></div>
+                      <div className="hover-popup-row"><span>Level</span><span className={`level-badge ${point.level}`}>{point.level}</span></div>
+                      <div className="hover-popup-time">{fmtTs(point._time, timezone)}</div>
+                      <div className="hover-popup-hint">click to open</div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
           </div>
         )}
