@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
-  CartesianGrid, Tooltip, Legend, ReferenceLine, ReferenceArea,
+  CartesianGrid, Tooltip, Legend, ReferenceLine, ReferenceArea, Customized,
 } from 'recharts';
 
 // ╔══════════════════════════════════════════════════════════════════╗
@@ -331,24 +331,8 @@ export default function App() {
 
   // Pixel-domain helpers
   const currentDomain = useMemo(() => xZoomDomain || [xDataMin, xDataMax], [xZoomDomain, xDataMin, xDataMax]);
-  // Always keep ref in sync — event handlers read from here to avoid stale closures
-  useEffect(() => { currentDomainRef.current = currentDomain; }, [currentDomain]);
-
-  // Snapshot of recharts plot area relative to the overlay div.
-  const updatePlotBounds = () => {
-    const overlay = chartRef.current;
-    if (!overlay) return;
-    const gridEl = overlay.parentElement?.querySelector('.recharts-cartesian-grid');
-    if (!gridEl) return;
-    const oRect = overlay.getBoundingClientRect();
-    const gRect = gridEl.getBoundingClientRect();
-    plotBoundsRef.current = {
-      left:   gRect.left   - oRect.left,
-      width:  gRect.width  || 1,
-      top:    gRect.top    - oRect.top,
-      height: gRect.height || 0,
-    };
-  };
+  // Assign directly during render — always synchronous, never stale (no useEffect needed)
+  currentDomainRef.current = currentDomain;
 
   // Reads only from refs — never stale regardless of render cycle
   const pxToTime = (px) => {
@@ -399,7 +383,6 @@ export default function App() {
 
   const onOverlayDown = (ev) => {
     if (ev.button !== 0) return;
-    updatePlotBounds();
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ev.clientX - rect.left;
@@ -444,7 +427,6 @@ export default function App() {
 
   const onWheel = (ev) => {
     ev.preventDefault();
-    updatePlotBounds();
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ev.clientX - rect.left;
@@ -665,6 +647,20 @@ export default function App() {
                 iconSize={8}
                 wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
               />
+              {/* Capture exact Recharts plot-area pixel bounds on every render */}
+              <Customized component={({ xAxisMap, yAxisMap }) => {
+                const xa = xAxisMap && (xAxisMap[0] ?? Object.values(xAxisMap)[0]);
+                const ya = yAxisMap && (yAxisMap[0] ?? Object.values(yAxisMap)[0]);
+                if (xa && ya) {
+                  plotBoundsRef.current = {
+                    left:   xa.x   ?? 0,
+                    width:  xa.width  ?? 1,
+                    top:    ya.y   ?? 0,
+                    height: ya.height ?? 0,
+                  };
+                }
+                return null;
+              }} />
               {/* Threshold reference lines */}
               <ReferenceLine y={thresholds.minor} stroke="#00ff8825" strokeDasharray="6 4" />
               <ReferenceLine y={thresholds.moderate} stroke="#ffaa0025" strokeDasharray="6 4" />
