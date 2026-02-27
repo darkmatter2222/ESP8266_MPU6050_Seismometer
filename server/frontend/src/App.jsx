@@ -161,7 +161,11 @@ export default function App() {
   const panRef = useRef({ anchor: null, domain: null });
   const chartRef = useRef(null);
   const plotBoundsRef = useRef({ left: 0, width: 1, top: 0, height: 0 });
-  const [drag, setDrag] = useState({ active: false, startPx: null, curPx: null, mode: null });
+  const dragRef = useRef({ active: false, startPx: 0, curPx: 0, mode: null });
+  const currentDomainRef = useRef([0, 1]);
+  const commitDragRef = useRef(null); // always-current commitDrag for window listener
+  const [selectionRect, setSelectionRect] = useState(null); // {startPx,curPx} for rendering
+  const [isDragging, setIsDragging] = useState(false);      // for pan cursor
 
   // ── Data Fetching ──────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -327,9 +331,10 @@ export default function App() {
 
   // Pixel-domain helpers
   const currentDomain = useMemo(() => xZoomDomain || [xDataMin, xDataMax], [xZoomDomain, xDataMin, xDataMax]);
+  // Always keep ref in sync — event handlers read from here to avoid stale closures
+  useEffect(() => { currentDomainRef.current = currentDomain; }, [currentDomain]);
 
-  // Reads the actual recharts plot area (cartesian grid) rect relative to the overlay.
-  // Must be called before any px→time conversion to keep plotBoundsRef accurate.
+  // Snapshot of recharts plot area relative to the overlay div.
   const updatePlotBounds = () => {
     const overlay = chartRef.current;
     if (!overlay) return;
@@ -345,32 +350,77 @@ export default function App() {
     };
   };
 
-  const pxToTime = useCallback((px) => {
+  // Reads only from refs — never stale regardless of render cycle
+  const pxToTime = (px) => {
     const { left, width } = plotBoundsRef.current;
     const fraction = Math.max(0, Math.min(1, (px - left) / width));
-    return currentDomain[0] + fraction * (currentDomain[1] - currentDomain[0]);
-  }, [currentDomain]);
+    const [d0, d1] = currentDomainRef.current;
+    return d0 + fraction * (d1 - d0);
+  };
 
-  // Overlay mouse handlers
+  const cancelDrag = () => {
+    dragRef.current = { active: false, startPx: 0, curPx: 0, mode: null };
+    panRef.current  = { anchor: null, domain: null };
+    setSelectionRect(null);
+    setIsDragging(false);
+  };
+
+  // commitDrag is a plain function (re-created each render) so it always closes over
+  // the latest seismicEvents / levelFilters / deviceFilters state.
+  // commitDragRef.current is updated every render so the window listener always calls
+  // the fresh version.
+  const commitDrag = () => {
+    const d = dragRef.current;
+    if (!d.active) return;
+    if ((d.mode === 'zoom' || d.mode === 'select') && Math.abs(d.curPx - d.startPx) > 6) {
+      const start = Math.min(d.startPx, d.curPx);
+      const end   = Math.max(d.startPx, d.curPx);
+      const t0 = pxToTime(start);
+      const t1 = pxToTime(end);
+      if (d.mode === 'zoom') {
+        setXZoomDomain([t0, t1]);
+      } else {
+        const inRange = seismicEvents
+          .filter(e => e._time >= t0 && e._time <= t1)
+          .filter(e => levelFilters[e.level] && (deviceFilters[e.alias || e.id] ?? true));
+        setRangeModal({ start: t0, end: t1, events: inRange });
+      }
+    }
+    cancelDrag();
+  };
+  commitDragRef.current = commitDrag;
+
+  // Window mouseup — fires even if pointer leaves the overlay (no auto-commit on edge)
+  useEffect(() => {
+    const onWinUp = () => { if (dragRef.current.active) commitDragRef.current(); };
+    window.addEventListener('mouseup', onWinUp);
+    return () => window.removeEventListener('mouseup', onWinUp);
+  }, []);
+
   const onOverlayDown = (ev) => {
-    if (ev.button !== 0) return; // left click only
+    if (ev.button !== 0) return;
     updatePlotBounds();
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ev.clientX - rect.left;
     if (toolMode === 'pan') {
-      panRef.current = { anchor: x, domain: currentDomain };
-      setDrag({ active: true, startPx: x, curPx: x, mode: 'pan' });
-    } else if (toolMode === 'zoom' || toolMode === 'select') {
-      setDrag({ active: true, startPx: x, curPx: x, mode: toolMode });
+      panRef.current = { anchor: x, domain: [...currentDomainRef.current] };
+      dragRef.current = { active: true, startPx: x, curPx: x, mode: 'pan' };
+      setIsDragging(true);
+    } else {
+      dragRef.current = { active: true, startPx: x, curPx: x, mode: toolMode };
+      setSelectionRect({ startPx: x, curPx: x });
+      setIsDragging(true);
     }
   };
+
   const onOverlayMove = (ev) => {
-    if (!drag.active) return;
+    if (!dragRef.current.active) return;
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ev.clientX - rect.left;
-    if (drag.mode === 'pan' && panRef.current.anchor != null) {
+    dragRef.current.curPx = x;
+    if (dragRef.current.mode === 'pan' && panRef.current.anchor != null) {
       const dxPx = x - panRef.current.anchor;
       const span = panRef.current.domain[1] - panRef.current.domain[0];
       const plotW = plotBoundsRef.current.width || 1;
@@ -378,46 +428,31 @@ export default function App() {
         panRef.current.domain[0] - (dxPx / plotW) * span,
         panRef.current.domain[1] - (dxPx / plotW) * span,
       ];
-      const width = next[1] - next[0];
-      if (next[0] < xDataMin) next = [xDataMin, xDataMin + width];
-      if (next[1] > xDataMax) next = [xDataMax - width, xDataMax];
+      const w = next[1] - next[0];
+      if (next[0] < xDataMin) next = [xDataMin, xDataMin + w];
+      if (next[1] > xDataMax) next = [xDataMax - w, xDataMax];
       setXZoomDomain(next);
-      setDrag(d => ({ ...d, curPx: x }));
     } else {
-      setDrag(d => ({ ...d, curPx: x }));
+      setSelectionRect({ startPx: dragRef.current.startPx, curPx: x });
     }
   };
-  const onOverlayUp = () => {
-    if (!drag.active) return;
-    if ((drag.mode === 'zoom' || drag.mode === 'select') && Math.abs(drag.curPx - drag.startPx) > 6) {
-      const start = Math.min(drag.startPx, drag.curPx);
-      const end = Math.max(drag.startPx, drag.curPx);
-      const t0 = pxToTime(start);
-      const t1 = pxToTime(end);
-      if (drag.mode === 'zoom') {
-        setXZoomDomain([t0, t1]);
-      } else if (drag.mode === 'select') {
-        const inRange = seismicEvents.filter(e => e._time >= t0 && e._time <= t1)
-          .filter(e => levelFilters[e.level] && (deviceFilters[e.alias || e.id] ?? true));
-        setRangeModal({ start: t0, end: t1, events: inRange });
-      }
-    }
-    setDrag({ active: false, startPx: null, curPx: null, mode: null });
-    panRef.current = { anchor: null, domain: null };
-  };
+
+  const onOverlayUp = () => commitDrag();
+
   const resetZoom = () => setXZoomDomain(null);
-  const onPointClick = (data) => { if (data && data.payload) setModalEvent(data.payload); };
+  const onPointClick = (data) => { if (data?.payload) setModalEvent(data.payload); };
 
   const onWheel = (ev) => {
+    ev.preventDefault();
     updatePlotBounds();
     const rect = chartRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = ev.clientX - rect.left;
-    const dom = currentDomain;
-    const span = dom[1] - dom[0];
+    const [d0, d1] = currentDomainRef.current;
+    const span = d1 - d0;
     const { left: plotLeft, width: plotW } = plotBoundsRef.current;
     const fraction = Math.max(0, Math.min(1, (x - plotLeft) / plotW));
-    const center = dom[0] + fraction * span;
+    const center = d0 + fraction * span;
     const factor = ev.deltaY < 0 ? 0.8 : 1.25;
     const half = (span * factor) / 2;
     let next = [center - half, center + half];
@@ -659,19 +694,19 @@ export default function App() {
           <div
             ref={chartRef}
             className="chart-overlay"
-            style={{ cursor: toolMode === 'pan' ? (drag.active ? 'grabbing' : 'grab') : toolMode === 'select' ? 'crosshair' : 'zoom-in' }}
+            style={{ cursor: toolMode === 'pan' ? (isDragging ? 'grabbing' : 'grab') : toolMode === 'select' ? 'crosshair' : 'zoom-in' }}
             onMouseDown={onOverlayDown}
             onMouseMove={onOverlayMove}
             onMouseUp={onOverlayUp}
-            onMouseLeave={onOverlayUp}
+            onMouseLeave={cancelDrag}
             onWheel={onWheel}
           >
-            {drag.active && (drag.mode === 'zoom' || drag.mode === 'select') && (
+            {selectionRect && (
               <div
                 className="selection-rect"
                 style={{
-                  left:   Math.min(drag.startPx, drag.curPx),
-                  width:  Math.abs(drag.curPx - drag.startPx),
+                  left:   Math.min(selectionRect.startPx, selectionRect.curPx),
+                  width:  Math.abs(selectionRect.curPx - selectionRect.startPx),
                   top:    plotBoundsRef.current.top,
                   height: plotBoundsRef.current.height,
                 }}
