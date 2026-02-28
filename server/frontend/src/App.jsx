@@ -173,6 +173,25 @@ export default function App() {
   const [waveformLoading, setWaveformLoading] = useState(false);
   const [waveformView, setWaveformView] = useState('axes'); // 'axes' | 'deltag'
 
+  // Auto-fetch waveform when modal opens for an event that has waveform data
+  useEffect(() => {
+    if (!modalEvent?.has_waveform || !modalEvent?._id) { setWaveformData(null); return; }
+    let cancelled = false;
+    setWaveformLoading(true);
+    fetch(`/api/events/${modalEvent._id}/waveform`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (cancelled || !data?.waveform) return;
+        setWaveformData(data.waveform.map(s => ({
+          t: s[0], ax: s[1], ay: s[2], az: s[3],
+          dg: Math.max(Math.abs(s[1]), Math.abs(s[2]), Math.abs(s[3])),
+        })));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setWaveformLoading(false); });
+    return () => { cancelled = true; };
+  }, [modalEvent]);
+
   // ── Data Fetching ──────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
     try {
@@ -318,6 +337,8 @@ export default function App() {
         deltaG: e.deltaG,
         level: e.level,
         alias: key,
+        _id: e._id,
+        has_waveform: e.has_waveform,
         _c: colorForPoint({ ...e, alias: key })
       });
     }
@@ -832,7 +853,7 @@ export default function App() {
       {/* ─── Event Modal with Waveform ─────────────────────── */}
       {modalEvent && (
         <div className="modal-backdrop" onClick={() => { setModalEvent(null); setWaveformData(null); }}>
-          <div className={`modal ${waveformData ? 'waveform-modal' : ''}`} onClick={e => e.stopPropagation()}>
+          <div className={`modal ${(waveformData || modalEvent?.has_waveform) ? 'waveform-modal' : ''}`} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>Event Details</div>
               <button className="modal-close" onClick={() => { setModalEvent(null); setWaveformData(null); }}>✕</button>
@@ -842,32 +863,8 @@ export default function App() {
               <div className="kv"><span>Device</span><span style={{ color: deviceColor(modalEvent.alias) }}>{modalEvent.alias}</span></div>
               <div className="kv"><span>Level</span><span className={`level-badge ${modalEvent.level}`}>{modalEvent.level}</span></div>
               <div className="kv"><span>ΔG</span><span className="mono">{modalEvent.deltaG?.toFixed(5)}</span></div>
-              {modalEvent.has_waveform && !waveformData && (
-                <button
-                  className="btn waveform-btn"
-                  disabled={waveformLoading}
-                  onClick={async () => {
-                    setWaveformLoading(true);
-                    try {
-                      const res = await fetch(`/api/events/${modalEvent._id}/waveform`);
-                      if (res.ok) {
-                        const data = await res.json();
-                        // Convert [[t,ax,ay,az],...] to [{t,ax,ay,az,dg},...]
-                        const samples = data.waveform.map(s => ({
-                          t: s[0],
-                          ax: s[1],
-                          ay: s[2],
-                          az: s[3],
-                          dg: Math.max(Math.abs(s[1]), Math.abs(s[2]), Math.abs(s[3])),
-                        }));
-                        setWaveformData(samples);
-                      }
-                    } catch (err) { console.error('Waveform fetch error:', err); }
-                    setWaveformLoading(false);
-                  }}
-                >
-                  {waveformLoading ? 'Loading...' : 'View Waveform'}
-                </button>
+              {modalEvent.has_waveform && !waveformData && waveformLoading && (
+                <div className="waveform-loading">Loading waveform...</div>
               )}
               {waveformData && (
                 <div className="waveform-container">
