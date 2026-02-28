@@ -46,7 +46,7 @@ $remoteDir = "/home/$sshUser/seismometer"
 
 # ─── Firmware version ─────────────────────────────────────────────
 # Bump this string whenever you build and deploy new firmware
-$FIRMWARE_VERSION = "1.1.0"
+$FIRMWARE_VERSION = "1.2.0"
 
 # Source directory
 $source = Join-Path $PSScriptRoot 'server'

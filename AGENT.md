@@ -46,7 +46,7 @@ server/
     main.jsx                        ← React root + ErrorBoundary
   firmware/                         ← Created by Deploy.ps1 on the server
     firmware.bin                    ← Built by PlatformIO, SCPed by Deploy.ps1
-    firmware.json                   ← {"version": "1.1.0", "built_at": "..."}
+    firmware.json                   ← {"version": "1.2.0", "built_at": "..."}
 Deploy.ps1                          ← Deploys server + firmware to remote host
 .env                                ← SSH_USER, SSH_HOST, SSH_KEY_PATH (gitignored)
 AGENT.md                            ← This file
@@ -132,10 +132,11 @@ Skip the Docker rebuild — just SCP the files manually if needed. Or:
 | Method | Endpoint                          | Description                                      |
 |--------|----------------------------------|--------------------------------------------------|
 | GET    | `/`                               | Heartbeat (device sends `?id=MAC`)               |
-| POST   | `/api/seismic`                    | Log seismic event                                |
-| GET    | `/api/init`                       | Device init — returns config + firmware info     |
+| POST   | `/api/seismic`                    | Log seismic event (with optional waveform)       |
+| GET    | `/api/init`                       | Device init - returns config + firmware info     |
 | GET    | `/api/status`                     | Online/Offline + last_init + firmware_version    |
-| GET    | `/api/events`                     | All seismic events from MongoDB                  |
+| GET    | `/api/events`                     | All seismic events (waveform excluded for perf)  |
+| GET    | `/api/events/:id/waveform`        | Waveform data for a specific event               |
 | GET    | `/api/config`                     | Global + per-device config from MongoDB          |
 | PUT    | `/api/config`                     | Save config                                      |
 | POST   | `/api/config/reinit/:deviceId`    | Queue 205 reinit for a device                    |
@@ -157,9 +158,15 @@ Boot
   → MPU6050 init
   → Calibration (2000 samples, ~4 seconds)
 Loop (every 50ms):
-  → Read accel, debias
-  → If deltaG ≥ threshold → POST /api/seismic
-  Every heartbeat_interval (default 60s):
+  → Read accel, debias, write to ring buffer (60-sample circular)
+  → If deltaG ≥ threshold AND not already capturing:
+      → Start post-event capture (60 more samples = 3 seconds)
+      → Track peak deltaG during capture window
+  → When post-capture complete:
+      → Build JSON with waveform: [[relative_ms, ax, ay, az], ...]
+      → POST /api/seismic (with event_offset_ms for timestamp accuracy)
+      → Reset ring buffer
+  Every heartbeat_interval (default 60s, skipped during capture):
   → GET /?id=MAC
       ← 200 OK (healthy) | 205 (server wants reinit → ESP.restart())
 ```
@@ -188,3 +195,59 @@ Loop (every 50ms):
   needed for a firmware-only update — just SCP the files and the server serves them live.
 - **OTA flash partition**: NodeMCU v2 (4MB flash) supports OTA natively. Current sketch
   is small — plenty of room for the OTA staging partition.
+
+---
+
+## Waveform Capture System (v1.2.0)
+
+### How it works
+
+1. **Ring buffer**: Device continuously stores last 3 seconds (~60 samples at 20Hz)
+   of accelerometer data (ax, ay, az) in a circular buffer.
+2. **Event trigger**: When ΔG exceeds a threshold, the device enters "capture" mode.
+   The ring buffer is frozen (pre-event data preserved).
+3. **Post-capture**: Device continues sampling for 3 more seconds into a linear buffer,
+   tracking the peak ΔG during the entire capture window.
+4. **Upload**: After post-capture, the device builds a JSON payload with:
+   - The event metadata (level, peak deltaG, device ID)
+   - `event_offset_ms` — how many ms ago the event actually occurred
+   - `waveform` — array of `[relative_ms, ax, ay, az]` tuples (120 samples)
+5. **Server**: Stores waveform in MongoDB with the event. Emits socket event
+   WITHOUT waveform (bandwidth). Frontend fetches waveform on-demand.
+6. **Dashboard**: Event modal shows "View Waveform" button → fetches from
+   `GET /api/events/:id/waveform` → renders interactive seismograph chart.
+
+### Waveform data format
+
+```json
+{
+  "id": "48:55:19:ED:D8:9A",
+  "level": "moderate",
+  "deltaG": 0.1234,
+  "event_offset_ms": 3050,
+  "waveform": [
+    [-2950, 0.0012, -0.0005, 0.0003],
+    [-2900, 0.0015, -0.0008, 0.0001],
+    [0, 0.1234, 0.0800, 0.0100],
+    [50, 0.0900, 0.0600, 0.0080],
+    [3000, 0.0010, -0.0002, 0.0005]
+  ]
+}
+```
+
+Each waveform sample: `[time_relative_to_event_ms, ax, ay, az]`
+
+### Dashboard waveform viewer
+
+- **3-Axis mode**: Shows X (red), Y (green), Z (blue) acceleration traces
+- **ΔG mode**: Shows max(|ax|, |ay|, |az|) as single trace
+- Vertical dashed line marks event detection point
+- Tooltip shows exact time offset and acceleration values
+- Events in range table show 📊 indicator when waveform is available
+
+### Memory budget (ESP8266)
+
+- Pre-buffer: 60 × 16 bytes = 960 bytes
+- Post-buffer: 60 × 16 bytes = 960 bytes
+- JSON payload: ~5KB (String with reserve(12000))
+- Total static: ~1.9KB, total dynamic: ~12KB during upload

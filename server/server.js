@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http');
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 const { Server: SocketIO } = require('socket.io');
 
 // ── Configuration ────────────────────────────────────────────────
@@ -63,7 +63,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new SocketIO(server, { cors: { origin: '*' } });
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50kb' }));  // increased for waveform payloads
 
 // Socket.IO connection logging
 io.on('connection', (socket) => {
@@ -152,22 +152,36 @@ app.post('/api/seismic', async (req, res) => {
     const id = data.id || 'unknown';
     if (!translationDict[id]) translationDict[id] = id;
 
+    // If device sent event_offset_ms, compute actual event time
+    const eventOffsetMs = data.event_offset_ms || 0;
+    const eventTimestamp = new Date(Date.now() - eventOffsetMs).toISOString();
+
     const entry = {
-      timestamp: new Date().toISOString(),
+      timestamp: eventTimestamp,
       level: data.level,
       deltaG: data.deltaG,
       id,
       alias: translationDict[id],
     };
-    console.log(JSON.stringify(entry));
+
+    // Store waveform if present (array of [relative_ms, ax, ay, az])
+    if (data.waveform && Array.isArray(data.waveform)) {
+      entry.waveform = data.waveform;
+      entry.has_waveform = true;
+      console.log(`[WAVEFORM] ${translationDict[id]}: ${data.waveform.length} samples, peak=${data.deltaG}`);
+    }
+
+    console.log(JSON.stringify({ ...entry, waveform: undefined }));
 
     await eventsCol.insertOne(entry);
     lastEventTimes[id] = new Date();
 
-    // Push real-time to dashboard
-    io.emit('seismic:event', entry);
+    // Push real-time to dashboard (without waveform data for bandwidth)
+    const emitEntry = { ...entry, _id: entry._id?.toString() };
+    delete emitEntry.waveform;
+    io.emit('seismic:event', emitEntry);
 
-    // Consensus window
+    // Consensus window (uses actual event time for accuracy)
     windowDevices.add(id);
     if (!windowTimer) {
       console.log('----- window start');
@@ -272,14 +286,40 @@ app.get('/api/status', async (req, res) => {
 // ── GET /api/events ─────────────────────────────────────────────
 app.get('/api/events', async (req, res) => {
   try {
-    const events = await eventsCol.find({}, { projection: { _id: 0 } })
+    // Exclude waveform arrays from bulk listing (fetched per-event via /api/events/:id/waveform)
+    const events = await eventsCol.find({}, { projection: { waveform: 0 } })
       .sort({ timestamp: -1 })
       .limit(50000)
       .toArray();
+    // Convert _id to string for frontend use
+    events.forEach(e => { if (e._id) e._id = e._id.toString(); });
     res.json(events);
   } catch (err) {
     console.error('Events read error:', err.message);
     res.json([]);
+  }
+});
+
+// ── GET /api/events/:id/waveform ────────────────────────────────
+app.get('/api/events/:id/waveform', async (req, res) => {
+  try {
+    const event = await eventsCol.findOne(
+      { _id: new ObjectId(req.params.id) },
+      { projection: { waveform: 1, timestamp: 1, level: 1, deltaG: 1, alias: 1 } }
+    );
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!event.waveform) return res.status(404).json({ error: 'No waveform data for this event' });
+    res.json({
+      _id: event._id.toString(),
+      timestamp: event.timestamp,
+      level: event.level,
+      deltaG: event.deltaG,
+      alias: event.alias,
+      waveform: event.waveform,
+    });
+  } catch (err) {
+    console.error('Waveform read error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

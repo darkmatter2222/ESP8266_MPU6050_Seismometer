@@ -565,6 +565,20 @@ body {
 .kv { display: flex; justify-content: space-between; gap: 12px; }
 .range-table { height: 50vh; }
 
+/* ═══ Waveform Modal ═══════════════════════════════════════════ */
+.modal.waveform-modal { width: 800px; max-height: 90vh; }
+.waveform-btn { margin-top: 4px; width: 100%; padding: 8px; font-weight: 600; background: rgba(0,255,136,0.1); border-color: var(--accent); color: var(--accent); }
+.waveform-btn:hover { background: rgba(0,255,136,0.2); }
+.waveform-container { margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.3); border-radius: var(--radius); border: 1px solid var(--border); }
+.waveform-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.waveform-title { color: var(--accent); font-weight: 600; font-size: 12px; letter-spacing: 0.5px; }
+.waveform-toggle { display: flex; gap: 4px; }
+.waveform-toggle .btn-sm { font-size: 10px; padding: 2px 8px; }
+.waveform-toggle .btn-sm.active { background: var(--accent); color: #000; border-color: var(--accent); }
+.clickable-row { cursor: pointer; }
+.clickable-row:hover { background: rgba(0,255,136,0.08); }
+.waveform-indicator { font-size: 12px; text-align: center; }
+
 /* ═══ Responsive tweaks ══════════════════════════════════════════ */
 @media (max-width: 1200px) {
   .bottom-grid {

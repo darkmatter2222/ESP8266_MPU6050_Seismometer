@@ -4,6 +4,7 @@ import { io } from 'socket.io-client';
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine, ReferenceArea, Customized,
+  LineChart, Line,
 } from 'recharts';
 
 // ╔══════════════════════════════════════════════════════════════════╗
@@ -168,6 +169,9 @@ export default function App() {
   const commitDragRef = useRef(null);
   const [selectionRect, setSelectionRect] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [waveformData, setWaveformData] = useState(null); // loaded waveform samples
+  const [waveformLoading, setWaveformLoading] = useState(false);
+  const [waveformView, setWaveformView] = useState('axes'); // 'axes' | 'deltag'
 
   // ── Data Fetching ──────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
@@ -825,19 +829,87 @@ export default function App() {
 
       {/* Removed secondary panels: Activity, Consensus table, Recent, API Traffic */}
 
-      {/* ─── Event Modal ───────────────────────────────────── */}
+      {/* ─── Event Modal with Waveform ─────────────────────── */}
       {modalEvent && (
-        <div className="modal-backdrop" onClick={() => setModalEvent(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-backdrop" onClick={() => { setModalEvent(null); setWaveformData(null); }}>
+          <div className={`modal ${waveformData ? 'waveform-modal' : ''}`} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div>Event Details</div>
-              <button className="modal-close" onClick={() => setModalEvent(null)}>✕</button>
+              <button className="modal-close" onClick={() => { setModalEvent(null); setWaveformData(null); }}>✕</button>
             </div>
             <div className="modal-body">
               <div className="kv"><span>Time</span><span className="mono">{fmtTs(modalEvent._time, timezone)}</span></div>
               <div className="kv"><span>Device</span><span style={{ color: deviceColor(modalEvent.alias) }}>{modalEvent.alias}</span></div>
               <div className="kv"><span>Level</span><span className={`level-badge ${modalEvent.level}`}>{modalEvent.level}</span></div>
               <div className="kv"><span>ΔG</span><span className="mono">{modalEvent.deltaG?.toFixed(5)}</span></div>
+              {modalEvent.has_waveform && !waveformData && (
+                <button
+                  className="btn waveform-btn"
+                  disabled={waveformLoading}
+                  onClick={async () => {
+                    setWaveformLoading(true);
+                    try {
+                      const res = await fetch(`/api/events/${modalEvent._id}/waveform`);
+                      if (res.ok) {
+                        const data = await res.json();
+                        // Convert [[t,ax,ay,az],...] to [{t,ax,ay,az,dg},...]
+                        const samples = data.waveform.map(s => ({
+                          t: s[0],
+                          ax: s[1],
+                          ay: s[2],
+                          az: s[3],
+                          dg: Math.max(Math.abs(s[1]), Math.abs(s[2]), Math.abs(s[3])),
+                        }));
+                        setWaveformData(samples);
+                      }
+                    } catch (err) { console.error('Waveform fetch error:', err); }
+                    setWaveformLoading(false);
+                  }}
+                >
+                  {waveformLoading ? 'Loading...' : 'View Waveform'}
+                </button>
+              )}
+              {waveformData && (
+                <div className="waveform-container">
+                  <div className="waveform-toolbar">
+                    <span className="waveform-title">Seismograph</span>
+                    <div className="waveform-toggle">
+                      {[['axes','3-Axis'],['deltag','ΔG']].map(([v,label]) => (
+                        <button key={v} className={`btn btn-sm ${waveformView === v ? 'active' : ''}`}
+                          onClick={() => setWaveformView(v)}>{label}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <LineChart data={waveformData} margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                      <XAxis dataKey="t" type="number" domain={['dataMin','dataMax']}
+                        tickFormatter={v => `${v >= 0 ? '+' : ''}${(v/1000).toFixed(1)}s`}
+                        stroke="#888" fontSize={10}
+                        label={{ value: 'Time relative to event (s)', position: 'bottom', offset: 5, fill: '#888', fontSize: 10 }} />
+                      <YAxis stroke="#888" fontSize={10}
+                        label={{ value: 'Acceleration (g)', angle: -90, position: 'insideLeft', fill: '#888', fontSize: 10 }} />
+                      <ReferenceLine x={0} stroke="#ff3366" strokeWidth={2} strokeDasharray="4 2"
+                        label={{ value: 'Event', fill: '#ff3366', fontSize: 10, position: 'top' }} />
+                      {waveformView === 'axes' ? (
+                        <>
+                          <Line type="monotone" dataKey="ax" stroke="#ff6644" dot={false} strokeWidth={1.5} name="X" />
+                          <Line type="monotone" dataKey="ay" stroke="#00ff88" dot={false} strokeWidth={1.5} name="Y" />
+                          <Line type="monotone" dataKey="az" stroke="#00aaff" dot={false} strokeWidth={1.5} name="Z" />
+                        </>
+                      ) : (
+                        <Line type="monotone" dataKey="dg" stroke="#ffaa00" dot={false} strokeWidth={2} name="ΔG" />
+                      )}
+                      <Legend wrapperStyle={{ color: '#ccc', fontSize: 11 }} />
+                      <Tooltip
+                        contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 6, fontSize: 11 }}
+                        labelFormatter={v => `t = ${v >= 0 ? '+' : ''}${v}ms`}
+                        formatter={(val, name) => [val.toFixed(5) + ' g', name]}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
             <div className="modal-actions">
               <button className="btn" onClick={() => exportCsv([modalEvent], 'event.csv')}>Export</button>
@@ -870,11 +942,14 @@ export default function App() {
                   </thead>
                   <tbody>
                     {rangeModal.events.slice(0, 500).map((e,i) => (
-                      <tr key={i}>
+                      <tr key={i} className={e.has_waveform ? 'clickable-row' : ''}
+                        onClick={() => { if (e.has_waveform || e._id) { setRangeModal(null); setModalEvent(e); } }}
+                        title={e.has_waveform ? 'Click to view waveform' : ''}>
                         <td className="mono">{fmtTs(e._time, timezone)}</td>
                         <td style={{ color: deviceColor(e.alias) }}>{e.alias}</td>
                         <td><span className={`level-badge ${e.level}`}>{e.level}</span></td>
                         <td className="mono">{e.deltaG?.toFixed(5)}</td>
+                        {e.has_waveform && <td className="waveform-indicator">📊</td>}
                       </tr>
                     ))}
                   </tbody>
