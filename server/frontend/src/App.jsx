@@ -877,17 +877,18 @@ export default function App() {
                       ))}
                     </div>
                   </div>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <LineChart data={waveformData} margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <LineChart data={waveformData} margin={{ top: 10, right: 20, bottom: 40, left: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#333" />
                       <XAxis dataKey="t" type="number" domain={['dataMin','dataMax']}
                         tickFormatter={v => `${v >= 0 ? '+' : ''}${(v/1000).toFixed(1)}s`}
-                        stroke="#888" fontSize={10}
-                        label={{ value: 'Time relative to event (s)', position: 'bottom', offset: 5, fill: '#888', fontSize: 10 }} />
+                        stroke="#888" fontSize={10} tick={{ dy: 4 }}
+                        label={{ value: 'Time relative to event (s)', position: 'bottom', offset: 20, fill: '#888', fontSize: 10 }} />
                       <YAxis stroke="#888" fontSize={10}
-                        label={{ value: 'Acceleration (g)', angle: -90, position: 'insideLeft', fill: '#888', fontSize: 10 }} />
+                        label={{ value: 'Acceleration (g)', angle: -90, position: 'insideLeft', offset: -5, fill: '#888', fontSize: 10, dy: -10 }} />
                       <ReferenceLine x={0} stroke="#ff3366" strokeWidth={2} strokeDasharray="4 2"
                         label={{ value: 'Event', fill: '#ff3366', fontSize: 10, position: 'top' }} />
+                      <Legend verticalAlign="top" align="right" wrapperStyle={{ color: '#ccc', fontSize: 11, paddingBottom: 8 }} />
                       {waveformView === 'axes' ? (
                         <>
                           <Line type="monotone" dataKey="ax" stroke="#ff6644" dot={false} strokeWidth={1.5} name="X" />
@@ -897,7 +898,6 @@ export default function App() {
                       ) : (
                         <Line type="monotone" dataKey="dg" stroke="#ffaa00" dot={false} strokeWidth={2} name="ΔG" />
                       )}
-                      <Legend wrapperStyle={{ color: '#ccc', fontSize: 11 }} />
                       <Tooltip
                         contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 6, fontSize: 11 }}
                         labelFormatter={v => `t = ${v >= 0 ? '+' : ''}${v}ms`}
