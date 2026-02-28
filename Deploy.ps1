@@ -139,10 +139,13 @@ if (Test-Path $firmwareBin) {
         exit 1
     }
 
-    # Write firmware.json metadata alongside the binary
+    # Write firmware.json metadata alongside the binary (ASCII to avoid UTF-8 BOM)
     $builtAt = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
-    $fwJson = '{"version": "' + $FIRMWARE_VERSION + '", "built_at": "' + $builtAt + '"}'
-    ssh -i $sshKeyPath "$sshUser@$sshHost" "echo '$fwJson' > $remoteDir/firmware/firmware.json"
+    $tempJson = Join-Path $env:TEMP 'firmware.json'
+    $fwJsonObj = @{ version = $FIRMWARE_VERSION; built_at = $builtAt }
+    $fwJsonObj | ConvertTo-Json -Compress | Set-Content -Path $tempJson -Encoding ASCII -NoNewline
+    scp -i $sshKeyPath -o StrictHostKeyChecking=no "$tempJson" "${sshUser}@${sshHost}:${remoteDir}/firmware/firmware.json"
+    Remove-Item $tempJson -Force -ErrorAction SilentlyContinue
     Write-Host "  Firmware v$FIRMWARE_VERSION deployed to server."
     Write-Host "  Devices will self-update on next heartbeat/reboot."
 } else {
